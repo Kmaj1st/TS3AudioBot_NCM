@@ -1,3 +1,11 @@
+# Ts3AudioBot_NCM
+Private fork. No any new features / changes are documented.
+
+Repo used:
+- [TS3AudioBot-NetEaseCloudmusic-plugin](https://github.com/ZHANGTIANYAO1/TS3AudioBot-NetEaseCloudmusic-plugin),
+- [TS3AudioBot-NetEaseCloudmusic-plugin pull request #68](https://github.com/ZHANGTIANYAO1/TS3AudioBot-NetEaseCloudmusic-plugin/pull/68)
+- - or check [TS3AudioBot-NetEaseCloudmusic-plugin by @577fkj](https://github.com/577fkj/TS3AudioBot-NetEaseCloudmusic-plugin/tree/main)
+
 # TS3AudioBot
 
 This is a open-source TeamSpeak3 bot, playing music and much more.  
