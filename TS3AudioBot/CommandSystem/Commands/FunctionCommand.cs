@@ -324,6 +324,7 @@ namespace TS3AudioBot.CommandSystem.Commands
 			return type;
 		}
 
+#pragma warning disable CS8825 // Return value must be non-null because parameter is non-null.
 		[return: NotNullIfNotNull("value")]
 		private static object? UnwrapReturn(object? value)
 		{
@@ -342,6 +343,7 @@ namespace TS3AudioBot.CommandSystem.Commands
 			}
 			return value;
 		}
+#pragma warning restore CS8825 // Return value must be non-null because parameter is non-null.
 
 		public static CommandException ThrowAtLeastNArguments(int count)
 		{

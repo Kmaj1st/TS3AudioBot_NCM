@@ -16,7 +16,7 @@ namespace TS3AudioBot.CommandSystem
 {
 	internal static class CommandParser
 	{
-		public const char DefaultCommandChar = '!';
+		public const string DefaultCommandChars = "!！.。";
 		public const char DefaultDelimeterChar = ' ';
 
 		// This switch follows more or less a DEA to this EBNF
@@ -27,7 +27,12 @@ namespace TS3AudioBot.CommandSystem
 		// FREESTRING   := [^)]+
 		// QUOTESTRING  := '"' [<anything but ", \" is ok>]* '"'
 
-		public static AstNode ParseCommandRequest(string request, char commandChar = DefaultCommandChar, char delimeterChar = DefaultDelimeterChar)
+		public static AstNode ParseCommandRequest(string request, char commandChar, char delimeterChar = DefaultDelimeterChar)
+		{
+			return ParseCommandRequest(request, commandChar.ToString(), delimeterChar);
+		}
+
+		public static AstNode ParseCommandRequest(string request, string commandChars = DefaultCommandChars, char delimeterChar = DefaultDelimeterChar)
 		{
 			AstCommand? root = null;
 			var comAst = new Stack<AstCommand>();
@@ -36,7 +41,7 @@ namespace TS3AudioBot.CommandSystem
 			var strPtr = new StringPtr(request);
 
 			var startTrim = request.AsSpan().TrimStart();
-			if (startTrim.IsEmpty || startTrim[0] != commandChar)
+			if (startTrim.IsEmpty || !commandChars.Contains(startTrim[0]))
 			{
 				return new AstValue(request, StringType.FreeString)
 				{
@@ -55,8 +60,8 @@ namespace TS3AudioBot.CommandSystem
 					// Got a command
 					buildCom = new AstCommand(request);
 					// Consume CommandChar if left over
-					if (strPtr.Char == commandChar)
-						strPtr.Next(commandChar);
+					if (commandChars.Contains(strPtr.Char))
+						strPtr.Next(commandChars);
 
 					if (root is null) root = buildCom;
 					else comAst.Peek().Parameter.Add(buildCom);
@@ -86,7 +91,7 @@ namespace TS3AudioBot.CommandSystem
 							{
 								build = BuildStatus.ParseFreeString;
 							}
-							else if (strPtr.IsNext(commandChar))
+							else if (strPtr.IsNext(commandChars))
 							{
 								strPtr.Next('(');
 								build = BuildStatus.ParseCommand;
@@ -127,7 +132,7 @@ namespace TS3AudioBot.CommandSystem
 					{
 						for (; !strPtr.End; strPtr.Next())
 						{
-							if ((strPtr.Char == '(' && strPtr.HasNext && strPtr.IsNext(commandChar))
+							if ((strPtr.Char == '(' && strPtr.HasNext && strPtr.IsNext(commandChars))
 								|| strPtr.Char == ')'
 								|| strPtr.Char == delimeterChar)
 							{
@@ -226,6 +231,13 @@ namespace TS3AudioBot.CommandSystem
 				Next();
 			}
 
+			public void Next(string mustBe)
+			{
+				if (!mustBe.Contains(Char))
+					throw new InvalidOperationException();
+				Next();
+			}
+
 			public bool TryNext(char mustBe)
 			{
 				if (Char != mustBe)
@@ -235,6 +247,9 @@ namespace TS3AudioBot.CommandSystem
 			}
 
 			public bool IsNext(char what) => HasNext && text[Index + 1] == what;
+
+			public bool IsNext(string what) => HasNext && what.Contains(text[Index + 1]);
+
 
 			public void SkipChar(char c = ' ')
 			{

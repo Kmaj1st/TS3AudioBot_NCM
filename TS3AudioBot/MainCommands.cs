@@ -9,6 +9,7 @@
 
 using CliWrap;
 using CliWrap.Buffered;
+using NeteaseApiData;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
@@ -18,6 +19,7 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using TagLib.Matroska;
 using TS3AudioBot.Algorithm;
 using TS3AudioBot.Audio;
 using TS3AudioBot.CommandSystem;
@@ -42,14 +44,17 @@ using TS3AudioBot.Web.Api;
 using TS3AudioBot.Web.Model;
 using TSLib;
 using TSLib.Audio;
+using TSLib.Full;
 using TSLib.Full.Book;
 using TSLib.Helper;
 using TSLib.Messages;
+using static Org.BouncyCastle.Math.EC.ECCurve;
 
 namespace TS3AudioBot
 {
 	public static class MainCommands
 	{
+		private static readonly NLog.Logger Log = NLog.LogManager.GetCurrentClassLogger();
 		internal static ICommandBag Bag { get; } = new MainCommandsBag();
 
 		internal class MainCommandsBag : ICommandBag
@@ -69,14 +74,51 @@ namespace TS3AudioBot
 		// (a|b) = either or switch
 
 		// ReSharper disable UnusedMember.Global
-		[Command("add")]
-		public static async Task CommandAdd(PlayManager playManager, InvokerData invoker, string url, params string[] attributes)
-			=> await playManager.Enqueue(invoker, url, meta: PlayManager.ParseAttributes(attributes));
+
+		private static readonly TextMod SongDone = new TextMod(TextModFlag.Color, Color.Gray);
+		private static readonly TextMod SongCurrent = new TextMod(TextModFlag.Bold);
+		private static bool avatarWarned;
+		private static bool descriptionWarned;
+
 
 		[Command("add")]
-		public static async Task CommandAdd(PlayManager playManager, InvokerData invoker, IAudioResourceResult rsc, params string[] attributes)
-			=> await playManager.Enqueue(invoker, rsc.AudioResource, meta: PlayManager.ParseAttributes(attributes));
+		public static async Task<string> CommandAdd(PlayManager pm, params string[] request)
+		{
+			MusicInfo? mInfo;
 
+			string musicStr;
+			string? meta;
+
+			if (request[^1].Contains("#"))
+			{
+				musicStr = string.Join(" ", request.Take(request.Length - 1));
+				meta = request[^1];
+			}
+			else
+			{
+				musicStr = string.Join("", request);
+				meta = null;
+			}
+
+			mInfo = await pm.GetMusicInfo(musicStr, PlayInfo.ToPlayInfo(meta));
+
+			if (mInfo is null)
+			{
+				Log.Error("[MainCommands.CommandAdd] mInfo is null");
+				return "无法获取歌曲信息";
+			}
+			pm.AddMusic(mInfo, true);
+			return "已添加到下一首播放";
+		}
+
+		[Command("folder add")]
+		public static async Task<string> CommandFolderAdd(PlayManager pm, string folder) => await pm.AddFolder(folder);
+
+		[Command("folder set")]
+		public static async Task<string> CommandFolderSet(PlayManager pm, string folder) {
+			CommandClear(pm);
+			return await CommandFolderAdd(pm, folder);
+		}
 		[Command("alias add")]
 		public static void CommandAliasAdd(CommandManager commandManager, ConfBot confBot, string commandName, string command)
 		{
@@ -127,15 +169,35 @@ namespace TS3AudioBot
 		}
 
 		[Command("bot avatar set")]
-		public static async Task CommandBotAvatarSet(Ts3Client ts3Client, string url)
+		public static async Task CommandBotAvatarSet(Ts3Client? ts3Client, string? url = null)
 		{
-			url = TextUtil.ExtractUrlFromBb(url);
-			await WebWrapper.Request(url).ToAction(async x =>
+			if (ts3Client is null)
 			{
-				using var stream = await x.Content.ReadAsStreamAsync();
-				using var image = await ImageUtil.ResizeImageSave(stream);
-				await ts3Client.UploadAvatar(image.Stream);
-			});
+				Log.Fatal("ts3Client is null");
+				return;
+			}
+			if (url is null) {
+				await ts3Client.SendChannelMessage("用法!bot avatar set [url]");
+				return;
+			}
+			try
+			{
+				url = TextUtil.ExtractUrlFromBb(url);
+				await WebWrapper.Request(url).ToAction(async x =>
+				{
+					using var stream = await x.Content.ReadAsStreamAsync();
+					using var image = await ImageUtil.ResizeImageSave(stream);
+					await ts3Client.UploadAvatar(image.Stream);
+				});
+			} catch (Exception e)
+			{
+				if (!avatarWarned)
+				{
+					Log.Warn(e.ToString());
+					Log.Warn("Can't set avatar, maybe this bot has no permission?");
+					avatarWarned = true;
+				}
+			}
 		}
 
 		[Command("bot avatar clear")]
@@ -145,7 +207,25 @@ namespace TS3AudioBot
 		public static Task CommandBotBadges(Ts3Client ts3Client, string badges) => ts3Client.ChangeBadges(badges);
 
 		[Command("bot description set")]
-		public static Task CommandBotDescriptionSet(Ts3Client ts3Client, string description) => ts3Client.ChangeDescription(description);
+		public static async Task CommandBotDescriptionSet(Ts3Client? ts3Client, string description)
+		{
+			if (ts3Client is null)
+			{
+				Log.Fatal("ts3Client is null");
+				return;
+			}
+			try
+			{
+				await ts3Client.ChangeDescription(description);
+			} catch
+			{
+				if (!descriptionWarned)
+				{
+					Log.Warn("Can't set description, maybe this bot has no permission?");
+					descriptionWarned = true;
+				}
+			}
+		}
 
 		[Command("bot diagnose", "_undocumented")]
 		public static async Task<JsonArray<SelfDiagnoseMessage>> CommandBotDiagnose(Player player, IVoiceTarget target, Connection book, ConfRoot rootConf, WebServer webServer)
@@ -365,8 +445,17 @@ namespace TS3AudioBot
 			}
 		}
 
+		/*
 		[Command("clear")]
 		public static void CommandClear(PlaylistManager playlistManager) => playlistManager.Clear();
+		*/
+
+		[Command("clear")]
+		public static string CommandClear(PlayManager pm)
+		{
+			pm.ClearSongList();
+			return "闺闺龟归零";
+		}
 
 		[Command("command parse", "cmd_parse_command_help")]
 		public static JsonValue<AstNode> CommandParse(string parameter)
@@ -423,9 +512,43 @@ namespace TS3AudioBot
 			}
 		}
 
+		[Command("export")]
+		public static async Task<string> CommandExport(PlayManager pm, string arg = "")
+		{
+			return await pm.Export(arg);
+		}
+
 		[Command("from", "_undocumented")]
 		public static async Task CommandFrom(PlayManager playManager, InvokerData invoker, string factoryName, string url)
 			=> await playManager.Play(invoker, url, factoryName);
+
+		[Command("gedan add")]
+		public static async Task<string> CommandGedanadd(PlayManager pm, string idOrName)
+		{
+			try
+			{
+				return await pm.GedanAdd(idOrName);
+			}
+			catch (Exception e)
+			{
+				Log.Error("[MainCommands.CommandGedanadd]" + e.ToString());
+				return "添加歌单失败";
+			}
+		}
+
+		[Command("gedan set")]
+		public static async Task<string> CommandGedanSet(PlayManager pm, string idOrName)
+		{
+			try
+			{
+				return await pm.GedanSet(idOrName);
+			}
+			catch (Exception e)
+			{
+				Log.Error($"[MainCommands.CommandGedanadd] {e.ToString()}");
+				return $"设置歌单失败, {e.ToString()}";
+			}
+		}
 
 		[Command("get", "_undocumented")]
 		[Usage("<index> <list...>", "Get an element out of a list")]
@@ -793,9 +916,6 @@ namespace TS3AudioBot
 			return null;
 		}
 
-		private static readonly TextMod SongDone = new TextMod(TextModFlag.Color, Color.Gray);
-		private static readonly TextMod SongCurrent = new TextMod(TextModFlag.Bold);
-
 		private static int GetIndexExpression(PlaylistManager playlistManager, string expression)
 		{
 			int index;
@@ -817,6 +937,18 @@ namespace TS3AudioBot
 				throw new CommandException(strings.error_unrecognized_descriptor, CommandExceptionReason.CommandError);
 			}
 			return index;
+		}
+
+		[Command("import")]
+		public static async Task<string> CommandImport(PlayManager pm, string? arg = null)
+		{
+			if (arg == null)
+			{
+				return CommandLists(pm, arg);
+			} else
+			{
+				return await pm.Import(arg);
+			}
 		}
 
 		[Command("info")]
@@ -924,242 +1056,79 @@ namespace TS3AudioBot
 			catch (Exception ex) { throw new CommandException(strings.cmd_kickme_missing_permission, ex, CommandExceptionReason.CommandError); }
 		}
 
-		[Command("list add")]
-		public static async Task<JsonValue<PlaylistItemGetData>> CommandListAdd(ResolveContext resourceFactory, PlaylistManager playlistManager, string listId, string link /* TODO param */)
+		[Command("list")]
+		public static async Task<string> CommandList(PlayManager pm, int limit = 0)
 		{
-			PlaylistItemGetData? getData = null;
-			var playResource = await resourceFactory.Load(link);
-			playlistManager.ModifyPlaylist(listId, plist =>
+			limit = limit == 0 ? 3 : limit;
+			try
 			{
-				var item = PlaylistItem.From(playResource);
-				plist.Add(item).UnwrapThrow();
-				getData = resourceFactory.ToApiFormat(item);
-				//getData.Index = plist.Items.Count - 1;
-			}).UnwrapThrow();
-			return JsonValue.Create(getData!, strings.info_ok);
-		}
-
-		[Command("list clear")]
-		public static void CommandListClear(PlaylistManager playlistManager, string listId)
-			=> playlistManager.ModifyPlaylist(listId, plist => plist.Clear()).UnwrapThrow();
-
-		[Command("list create", "_undocumented")]
-		public static void CommandListCreate(PlaylistManager playlistManager, string listId, string? title = null)
-			=> playlistManager.CreatePlaylist(listId, title ?? listId).UnwrapThrow();
-
-		[Command("list delete")]
-		public static JsonEmpty CommandListDelete(PlaylistManager playlistManager, UserSession session, string listId)
-		{
-			Task<string?> ResponseListDelete(string message)
-			{
-				if (TextUtil.GetAnswer(message) == Answer.Yes)
-				{
-					playlistManager.DeletePlaylist(listId).UnwrapThrow();
-				}
-				return Task.FromResult<string?>(null);
+				return await pm.GetPlayListString(limit);
 			}
-
-			session.SetResponse(ResponseListDelete);
-			return new JsonEmpty(string.Format(strings.cmd_list_delete_confirm + YesNoOption, listId));
-		}
-
-		[Command("list delete")]
-		public static void CommandListDelete(PlaylistManager playlistManager, ApiCall _, string listId)
-			=> playlistManager.DeletePlaylist(listId).UnwrapThrow();
-
-		[Command("list from", "_undocumented")]
-		public static async Task<JsonValue<PlaylistInfo>> PropagiateLoad(PlaylistManager playlistManager, ResolveContext resolver, string resolverName, string listId, string url)
-		{
-			var getList = await resolver.LoadPlaylistFrom(url, resolverName);
-			return ImportMerge(playlistManager, resolver, getList, listId);
-		}
-
-		[Command("list import", "cmd_list_get_help")] // TODO readjust help texts
-		public static async Task<JsonValue<PlaylistInfo>> CommandListImport(PlaylistManager playlistManager, ResolveContext resolver, string listId, string link)
-		{
-			var getList = await resolver.LoadPlaylistFrom(link);
-			return ImportMerge(playlistManager, resolver, getList, listId);
-		}
-
-		private static JsonValue<PlaylistInfo> ImportMerge(PlaylistManager playlistManager, ResolveContext resolver, Playlist addList, string listId)
-		{
-			if (!playlistManager.ExistsPlaylist(listId))
-				playlistManager.CreatePlaylist(listId).UnwrapThrow();
-
-			playlistManager.ModifyPlaylist(listId, playlist =>
+			catch (Exception ex)
 			{
-				playlist.AddRange(addList.Items).UnwrapThrow();
-			}).UnwrapThrow();
-
-			return CommandListShow(playlistManager, resolver, listId, null, null);
+				Log.Error(ex.ToString());
+				return "获取播放清单失败";
+			}
 		}
 
-		[Command("list insert", "_undocumented")]  // TODO Doc
-		public static async Task<JsonValue<PlaylistItemGetData>> CommandListAdd(PlaylistManager playlistManager, ResolveContext resourceFactory, string listId, int index, string link /* TODO param */)
+		[Command("lists")]
+		public static string CommandLists(PlayManager pm, string? initial = null)
 		{
-			PlaylistItemGetData? getData = null;
-			var playResource = await resourceFactory.Load(link);
-			playlistManager.ModifyPlaylist(listId, plist =>
-			{
-				if (index < 0 || index >= plist.Items.Count)
-					throw new CommandException(strings.error_playlist_item_index_out_of_range, CommandExceptionReason.CommandError);
-
-				var item = PlaylistItem.From(playResource);
-				plist.Insert(index, item).UnwrapThrow();
-				getData = resourceFactory.ToApiFormat(item);
-				//getData.Index = plist.Items.Count - 1;
-			}).UnwrapThrow();
-			return JsonValue.Create(getData!, strings.info_ok);
+			return pm.Lists(initial);
 		}
 
-		[Command("list item get", "_undocumented")]
-		public static PlaylistItem CommandListItemMove(PlaylistManager playlistManager, string name, int index)
+		[Command("login")]
+		public static string CommandYunLogin()
 		{
-			var plist = playlistManager.LoadPlaylist(name).UnwrapThrow();
-			if (index < 0 || index >= plist.Items.Count)
-				throw new CommandException(strings.error_playlist_item_index_out_of_range, CommandExceptionReason.CommandError);
-
-			return plist[index];
+			return "请使用login qr 或者login sms [手机号] {验证码}";
 		}
 
-		[Command("list item move")] // TODO return modified elements
-		public static void CommandListItemMove(PlaylistManager playlistManager, string listId, int from, int to)
+		[Command("login qr")]
+		public static async Task<string> CommanQrloginAsync(PlayManager pm, Ts3Client ts3Client)
 		{
-			playlistManager.ModifyPlaylist(listId, playlist =>
-			{
-				if (from < 0 || from >= playlist.Items.Count
-					|| to < 0 || to >= playlist.Items.Count)
-				{
-					throw new CommandException(strings.error_playlist_item_index_out_of_range, CommandExceptionReason.CommandError);
-				}
-
-				if (from == to)
-					return;
-
-				var plitem = playlist[from];
-				playlist.RemoveAt(from);
-				playlist.Insert(to, plitem).UnwrapThrow();
-			}).UnwrapThrow();
+			return await pm.LoginQR();
 		}
 
-		[Command("list item delete")] // TODO return modified elements
-		public static JsonEmpty CommandListItemDelete(PlaylistManager playlistManager, string listId, int index /* TODO param */)
+		[Command("login sms")]
+		public static async Task<string> CommandSmsLoginAsync(PlayManager pm, string phoneandcode)
 		{
-			PlaylistItem? deletedItem = null;
-			playlistManager.ModifyPlaylist(listId, plist =>
-			{
-				if (index < 0 || index >= plist.Items.Count)
-					throw new CommandException(strings.error_playlist_item_index_out_of_range, CommandExceptionReason.CommandError);
-
-				deletedItem = plist[index];
-				plist.RemoveAt(index);
-			}).UnwrapThrow();
-			return new JsonEmpty(string.Format(strings.info_removed, deletedItem));
+			return await pm.LoginSms(phoneandcode);
 		}
 
-		[Command("list item name")] // TODO return modified elements
-		public static void CommandListItemName(PlaylistManager playlistManager, string listId, int index, string title)
+		[Command("mode")]
+		public static string CommandPlayMode(PlayManager pm, int mode = -1)
 		{
-			playlistManager.ModifyPlaylist(listId, plist =>
-			{
-				if (index < 0 || index >= plist.Items.Count)
-					throw new CommandException(strings.error_playlist_item_index_out_of_range, CommandExceptionReason.CommandError);
-
-				plist[index].AudioResource.ResourceTitle = title;
-			}).UnwrapThrow();
+			return pm.changeMode(mode);
 		}
 
-		[Command("list list")]
-		[Usage("<pattern>", "Filters all lists cantaining the given pattern.")]
-		public static JsonArray<PlaylistInfo> CommandListList(PlaylistManager playlistManager, string? pattern = null)
+		[Command("move")]
+		public static string CommandSwitch(PlayManager pm, int from, int to)
 		{
-			var files = playlistManager.GetAvailablePlaylists(pattern).UnwrapThrow();
-			if (files.Length <= 0)
-				return new JsonArray<PlaylistInfo>(files, strings.error_playlist_not_found);
-
-			return new JsonArray<PlaylistInfo>(files, fi => string.Join(", ", fi.Select(x => x.Id)));
-		}
-
-		[Command("list merge")]
-		public static void CommandListMerge(PlaylistManager playlistManager, string baseListId, string mergeListId) // future overload?: (IROP, IROP) -> IROP
-		{
-			var otherList = playlistManager.LoadPlaylist(mergeListId).UnwrapThrow();
-			playlistManager.ModifyPlaylist(baseListId, playlist =>
-			{
-				playlist.AddRange(otherList.Items).UnwrapThrow();
-			}).UnwrapThrow();
-		}
-
-		[Command("list name")]
-		public static void CommandListName(PlaylistManager playlistManager, string listId, string title)
-			=> playlistManager.ModifyPlaylist(listId, plist => plist.SetTitle(title)).UnwrapThrow();
-
-		[Command("list play")]
-		public static async Task CommandListPlayInternal(PlaylistManager playlistManager, PlayManager playManager, InvokerData invoker, string listId, int? index = null)
-		{
-			var plist = playlistManager.LoadPlaylist(listId).UnwrapThrow();
-
-			if (plist.Items.Count == 0)
-				throw new CommandException(strings.error_playlist_is_empty);
-
-			if (index != null && (index.Value < 0 || index.Value >= plist.Items.Count))
-				throw new CommandException(strings.error_playlist_item_index_out_of_range);
-
-			await playManager.Play(invoker, plist.Items, index ?? 0);
-		}
-
-		[Command("list queue")]
-		public static async Task CommandListQueue(PlaylistManager playlistManager, PlayManager playManager, InvokerData invoker, string listId)
-		{
-			var plist = playlistManager.LoadPlaylist(listId).UnwrapThrow();
-			await playManager.Enqueue(invoker, plist.Items);
-		}
-
-		[Command("list show")]
-		[Usage("<name> <index>", "Lets you specify the starting index from which songs should be listed.")]
-		public static JsonValue<PlaylistInfo> CommandListShow(PlaylistManager playlistManager, ResolveContext resourceFactory, string listId, int? offset = null, int? count = null)
-		{
-			const int maxSongs = 20;
-			var plist = playlistManager.LoadPlaylist(listId).UnwrapThrow();
-			int offsetV = Tools.Clamp(offset ?? 0, 0, plist.Items.Count);
-			int countV = Tools.Clamp(count ?? maxSongs, 0, Math.Min(maxSongs, plist.Items.Count - offsetV));
-			var items = plist.Items.Skip(offsetV).Take(countV).Select(x => resourceFactory.ToApiFormat(x)).ToArray();
-			var plInfo = new PlaylistInfo(listId, plist.Title)
-			{
-				SongCount = plist.Items.Count,
-				DisplayOffset = offsetV,
-				Items = items,
-			};
-
-			return JsonValue.Create(plInfo, x =>
-			{
-				var tmb = new TextModBuilder();
-				tmb.AppendFormat(strings.cmd_list_show_header, x.Title.Mod().Bold(), x.SongCount.ToString()).Append("\n");
-				var index = x.DisplayOffset;
-				foreach (var plitem in x.Items!)
-					tmb.Append((index++).ToString()).Append(": ").AppendLine(plitem.Title);
-				return tmb.ToString();
-			});
+			return pm.Switch(from, to);
 		}
 
 		[Command("next")]
-		public static async Task CommandNext(PlayManager playManager, InvokerData invoker)
-			=> await playManager.Next(invoker);
-
-		[Command("param", "_undocumented")] // TODO add documentation, when name decided
-		public static async Task<object?> CommandParam(ExecutionInformation info, int index)
+		public static async Task<string> CommandNext(PlayManager pm, ClientCall invoker, string? arg = null)
 		{
-			if (!info.TryGet<AliasContext>(out var ctx) || ctx.Arguments is null)
-				throw new CommandException("No parameter available", CommandExceptionReason.CommandError);
+			if (arg == null)
+			{
+				var playList = pm.MusicInfoList;
+				if (playList.Count == 0)
+				{
+					return "播放列表为空";
+				}
+				if (!pm.IsPlaying)
+				{
+					await CommandPlay(pm, pm.PlayerConnection, invoker);
+					return "";
+				}
+				await pm.PlayNextMusic();
+			} else
+			{
+				return await CommandAdd(pm, arg);
+			}
 
-			if (index < 0 || index >= ctx.Arguments.Count)
-				return null;
-
-			var backup = ctx.Arguments;
-			ctx.Arguments = null;
-			var result = await backup[index].Execute(info, Array.Empty<ICommand>());
-			ctx.Arguments = backup;
-			return result;
+			return $"";
 		}
 
 		[Command("pm")]
@@ -1182,18 +1151,32 @@ namespace TS3AudioBot
 		public static void CommandPause(Player playerConnection) => playerConnection.Paused = !playerConnection.Paused;
 
 		[Command("play")]
-		public static async Task CommandPlay(PlayManager playManager, Player playerConnection, InvokerData invoker)
+		public static async Task CommandPlay(PlayManager pm, Player playerConnection, InvokerData invoker)
 		{
-			if (!playManager.IsPlaying)
-				await playManager.Play(invoker);
+			if (!pm.IsPlaying)
+			{
+				pm.Invoker = invoker;
+				await pm.PlayNextMusic();
+			}
 			else
+			{
 				playerConnection.Paused = false;
+			}
 		}
 
 		[Command("play")]
-		public static async Task CommandPlay(PlayManager playManager, InvokerData invoker, string url, params string[] attributes)
-			=> await playManager.Play(invoker, url, meta: PlayManager.ParseAttributes(attributes));
-
+		public static async Task CommandPlay(PlayManager playManager, InvokerData invoker, string arg, params string[]? attributes)
+		{
+			if (attributes is null)
+			{
+				await playManager.Play(invoker, arg);
+			}
+			else
+			{
+				await playManager.Play(invoker, arg, meta: PlayManager.ParseAttributes(attributes));
+			}
+		}
+		
 		[Command("play")]
 		public static async Task CommandPlay(PlayManager playManager, InvokerData invoker, IAudioResourceResult rsc, params string[] attributes)
 			=> await playManager.Play(invoker, rsc.AudioResource, meta: PlayManager.ParseAttributes(attributes));
@@ -1253,44 +1236,6 @@ namespace TS3AudioBot
 			await bot.UpdateBotStatus();
 		}
 
-		[Command("random")]
-		public static JsonValue<bool> CommandRandom(PlaylistManager playlistManager) => new JsonValue<bool>(playlistManager.Random, string.Format(strings.info_status_random, playlistManager.Random ? strings.info_on : strings.info_off));
-		[Command("random on")]
-		public static void CommandRandomOn(PlaylistManager playlistManager) => playlistManager.Random = true;
-		[Command("random off")]
-		public static void CommandRandomOff(PlaylistManager playlistManager) => playlistManager.Random = false;
-		[Command("random seed", "cmd_random_seed_help")]
-		public static string CommandRandomSeed(PlaylistManager playlistManager)
-		{
-			string seed = Util.FromSeed(playlistManager.Seed);
-			return string.IsNullOrEmpty(seed) ? strings.info_empty : seed;
-		}
-		[Command("random seed", "cmd_random_seed_string_help")]
-		public static void CommandRandomSeed(PlaylistManager playlistManager, string newSeed)
-		{
-			if (newSeed.Any(c => !char.IsLetter(c)))
-				throw new CommandException(strings.cmd_random_seed_only_letters_allowed, CommandExceptionReason.CommandError);
-			playlistManager.Seed = Util.ToSeed(newSeed.ToLowerInvariant());
-		}
-		[Command("random seed", "cmd_random_seed_int_help")]
-		public static void CommandRandomSeed(PlaylistManager playlistManager, int newSeed) => playlistManager.Seed = newSeed;
-
-		[Command("repeat")]
-		public static JsonValue<LoopMode> CommandRepeat(PlaylistManager playlistManager)
-			=> new JsonValue<LoopMode>(playlistManager.Loop, x => x switch
-			{
-				LoopMode.Off => strings.cmd_repeat_info_off,
-				LoopMode.One => strings.cmd_repeat_info_one,
-				LoopMode.All => strings.cmd_repeat_info_all,
-				_ => throw Tools.UnhandledDefault(playlistManager.Loop),
-			});
-		[Command("repeat off")]
-		public static void CommandRepeatOff(PlaylistManager playlistManager) => playlistManager.Loop = LoopMode.Off;
-		[Command("repeat one")]
-		public static void CommandRepeatOne(PlaylistManager playlistManager) => playlistManager.Loop = LoopMode.One;
-		[Command("repeat all")]
-		public static void CommandRepeatAll(PlaylistManager playlistManager) => playlistManager.Loop = LoopMode.All;
-
 		[Command("rights can")]
 		public static async Task<JsonArray<string>> CommandRightsCan(ExecutionInformation info, RightsManager rightsManager, params string[] rights)
 			=> new JsonArray<string>(await rightsManager.GetRightsSubset(info, rights), r => r.Count > 0 ? string.Join(", ", r) : strings.info_empty);
@@ -1339,6 +1284,70 @@ namespace TS3AudioBot
 				throw new CommandException(strings.cmd_seek_out_of_range, CommandExceptionReason.CommandError);
 
 			await player.Seek(position);
+		}
+
+		[Command("shuffle")]
+		public static string CommandShuffle(PlayManager pm)
+		{
+			pm.ShufflePlayList();
+			return "Done";
+		}
+
+		[Command("status")]
+		public static async Task<string> CommandStatusAsync(PlayManager playManager)
+		{
+			string? api = playManager.NeteaseAPI;
+			if (api is null)
+			{
+				Log.Error("api is null");
+				return "api is null";
+			}
+			Dictionary<string, string>? header = playManager.Header;
+			if (header is null)
+			{
+				Log.Error("header is null");
+				return "header is null";
+			}
+
+			string result = $"\n网易云API: {playManager.NeteaseAPI}\n当前用户: ";
+			result = await CheckNCMStatus(api, header, result);
+
+			return result;
+		}
+
+		private static async Task<string> CheckNCMStatus(string api, Dictionary<string, string> header, string result)
+		{
+			try
+			{
+				if (!header.ContainsKey("Cookie") || string.IsNullOrEmpty(header["Cookie"]))
+				{
+					result += $"未登入";
+					return result;
+				}
+
+				var status = await GetLoginStatusAasync(api, header);
+				if (status == null || status.data == null || status.data.account == null)
+				{
+					result += $"未登入";
+					return result;
+				}
+
+				if (status.data.code == 200 && status.data.account.status == 0)
+				{
+					result += $"[URL=https://music.163.com/#/user/home?id={status.data?.profile?.userId}]{status.data?.profile?.nickname}[/URL]\n";
+				}
+				else
+				{
+					result += $"未登入";
+				}
+			}
+			catch (Exception e)
+			{
+				result += $"获取登录信息失败！";
+				Log.Error(e.ToString());
+				Log.Error("GetLoginStatusAasync error");
+			}
+			return result;
 		}
 
 		private static IList<AudioResource> GetSearchResult(this UserSession session)
@@ -1857,6 +1866,30 @@ namespace TS3AudioBot
 		}
 		// ReSharper enable UnusedMember.Global
 
+		[Command("deepdark")]
+		public static async Task CommandVisa(Ts3Client ts3Client, TsFullClient tsFullClient,ClientCall invoker)
+		{
+			ClientId? raw_id = invoker.ClientId;
+			Uid? raw_uid = invoker.ClientUid;
+			if (raw_id is null || raw_uid is null) return;
+			ServerGroupId? sid = ServerGroupId.TryFrom(9);
+			if (sid is null)
+			{
+				await tsFullClient.SendPrivateMessage("we are closed", (ClientId)raw_id);
+				return;
+			}
+			Random rand = new Random();
+			if (rand.Next(3) == 0)
+			{
+				await tsFullClient.SendPrivateMessage("(〃´∀｀)ゞぇへ♪", (ClientId)raw_id);
+				await tsFullClient.ServerGroupAddClient(
+					(ServerGroupId)sid,
+					await ts3Client.GetClientDbIdByUid((Uid)raw_uid)
+				);
+			}
+
+		}
+
 		public static async ValueTask<bool> HasRights(this ExecutionInformation info, params string[] rights)
 		{
 			if (!info.TryGet<CallerInfo>(out var caller)) caller = null;
@@ -1910,6 +1943,13 @@ namespace TS3AudioBot
 			if (!info.TryGet<CallerInfo>(out var caller) || caller.CommandComplexityCurrent + count > caller.CommandComplexityMax)
 				throw new CommandException(strings.error_cmd_complexity_reached, CommandExceptionReason.CommandError);
 			caller.CommandComplexityCurrent += count;
+		}
+
+
+		// NCM helper functions
+		public static async Task<RespStatus> GetLoginStatusAasync(string server, Dictionary<string, string> header)
+		{
+			return await Utils.HttpGetAsync<RespStatus>($"{server}/login/status?timestamp={Utils.GetTimeStamp()}", header);
 		}
 	}
 }

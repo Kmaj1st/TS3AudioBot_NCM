@@ -79,7 +79,7 @@ namespace TS3AudioBot
 
 			if (!setup.HideBanner)
 				LogHeader();
-
+			Log.Info("Setup");
 			DedicatedTaskScheduler.FromCurrentThread(() => StartBot(setup));
 			return ExitCodeOk;
 		}

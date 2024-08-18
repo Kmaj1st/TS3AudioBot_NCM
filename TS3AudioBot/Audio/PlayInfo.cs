@@ -15,14 +15,44 @@ namespace TS3AudioBot.Audio
 {
 	public sealed class PlayInfo
 	{
+		public enum Source
+		{
+			LOC,
+			URL,
+			NCM,
+		}
+
 		/// <summary>Defaults to: invoker.Uid - Can be set if the owner of a song differs from the invoker.</summary>
 		public Uid? ResourceOwnerUid { get; set; }
 		/// <summary>Starts the song at the specified time if set.</summary>
 		public TimeSpan? StartOffset { get; set; }
+		/// <summary>Determines where to play a song
+		public Enum? AudioSource { get; set; }
 
-		public PlayInfo(TimeSpan? startOffset = null)
+		public static Enum? ToAudioSource(string? str = null)
+		{
+			if (str is null) return null;
+			str = str.ToLower().Replace("#", "");
+			if (str.StartsWith("l") || str.StartsWith("b")) return Source.LOC;
+			if (str.StartsWith("w") || str.StartsWith("n")) return Source.NCM;
+			if (str.StartsWith("u")) return Source.URL;
+			return null;
+		}
+
+		public static PlayInfo ToPlayInfo(string? audioSource = null)
+		{
+			return new PlayInfo(null, audioSource);
+		}
+
+		public override string ToString()
+		{
+			return $"{ResourceOwnerUid}, {this.StartOffset}, {AudioSource}";
+		}
+
+		public PlayInfo(TimeSpan? startOffset = null, string? audioSource = null)
 		{
 			StartOffset = startOffset;
+			AudioSource = ToAudioSource(audioSource);
 		}
 
 		public PlayInfo Merge(PlayInfo other) => Merge(this, other);
@@ -37,6 +67,7 @@ namespace TS3AudioBot.Audio
 				return other;
 			self.ResourceOwnerUid ??= other.ResourceOwnerUid;
 			self.StartOffset ??= other.StartOffset;
+			self.AudioSource ??= other.AudioSource;
 			return self;
 		}
 

@@ -42,6 +42,8 @@ namespace TS3AudioBot
 		private readonly TickWorker idleTickWorker;
 
 		private bool isClosed;
+		private bool NCMLoaded;
+
 		internal BotInjector Injector { get; }
 		internal DedicatedTaskScheduler Scheduler { get; }
 
@@ -183,7 +185,10 @@ namespace TS3AudioBot
 			Scheduler.VerifyOwnThread();
 
 			Log.Info("Bot \"{0}\" connecting to \"{1}\"", config.Name, config.Connect.Address);
-			return Task.FromResult(ts3client.Connect());
+
+			Task<E<string>> result = Task.FromResult(ts3client.Connect());
+
+			return result;
 		}
 
 		public async Task Stop()
@@ -223,6 +228,22 @@ namespace TS3AudioBot
 				var info = CreateExecInfo();
 				await CallScript(info, onStart, false, true);
 			}
+			if (!NCMLoaded)
+			{
+				await this.NCMInit();
+				NCMLoaded = true;
+			}
+		}
+
+		private async Task NCMInit()
+		{
+			if (player is null)
+			{
+				Log.Error("[Bot.NCMInit] null player");
+				return;
+			}
+			Log.Info(player.ToString());
+			await playManager.Init(ts3FullClient, ts3client, player);
 		}
 
 		private async Task OnBotDisconnected(object? sender, DisconnectEventArgs e)
@@ -260,7 +281,11 @@ namespace TS3AudioBot
 			localization.ApplyLanguage();
 
 			textMessage.Message = textMessage.Message.TrimStart(' ');
-			if (!textMessage.Message.StartsWith("!", StringComparison.Ordinal))
+			bool a = !textMessage.Message.StartsWith("!", StringComparison.Ordinal);
+			bool b = !textMessage.Message.StartsWith("！", StringComparison.Ordinal);
+			bool c = !textMessage.Message.StartsWith(".", StringComparison.Ordinal);
+			bool d = !textMessage.Message.StartsWith("。", StringComparison.Ordinal);
+			if (a && b && c && d)
 				return;
 
 			Log.Info("User {0} requested: {1}", textMessage.InvokerName, textMessage.Message);
