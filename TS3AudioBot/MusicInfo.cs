@@ -7,6 +7,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
+using TS3AudioBot;
 using TS3AudioBot.ResourceFactories;
 
 public enum Mode
@@ -14,7 +15,7 @@ public enum Mode
     SeqPlay = 0,
     SeqLoopPlay = 1,
     RandomPlay = 2,
-    RandomLoopPlay = 3,
+    RandomLoop = 3,
 }
 
 public class PlayListMeta
@@ -148,24 +149,32 @@ public class MusicInfo
 		return new AudioResource(DetailUrl, GetFullName(), "media").Add("PlayUri", Image);
     }
 
-    public async Task<byte[]> GetImage()
+    public async Task<byte[]> GetImage(string DefaultImage)
 	{
 		string image;
-		if (String.IsNullOrEmpty(Image))
+		try
 		{
-			image = "https://nyanneko.com/favicon.ico";
-		} else
-		{
-			image = Image;
-		}
-		var request = (HttpWebRequest)WebRequest.Create(image);
-		request.Method = "GET";
+			if (String.IsNullOrEmpty(Image))
+			{
+				image = DefaultImage;
+			}
+			else
+			{
+				image = Image;
+			}
+			var request = (HttpWebRequest)WebRequest.Create(image);
+			request.Method = "GET";
 
-		using var response = (HttpWebResponse)await request.GetResponseAsync();
-		using Stream stream = response.GetResponseStream();
-		using var memoryStream = new MemoryStream();
-		await stream.CopyToAsync(memoryStream);
-		return memoryStream.ToArray();
+			using var response = (HttpWebResponse)await request.GetResponseAsync();
+			using Stream stream = response.GetResponseStream();
+			using var memoryStream = new MemoryStream();
+			await stream.CopyToAsync(memoryStream);
+			return memoryStream.ToArray();
+		}
+		catch
+		{
+			return null;
+		}
 	}
 
     public async Task InitMusicInfo(string? api, Dictionary<string, string>? header = null)

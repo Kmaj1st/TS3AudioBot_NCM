@@ -247,8 +247,8 @@ namespace TS3AudioBot.Config
 	{
 		protected override TomlTable.TableTypes TableType => TomlTable.TableTypes.Inline;
 
-		public ConfigValue<float> Default { get; } = new ConfigValue<float>("default", 50);
-		public ConfigValue<float> Min { get; } = new ConfigValue<float>("min", 25);
+		public ConfigValue<float> Default { get; } = new ConfigValue<float>("default", 30);
+		public ConfigValue<float> Min { get; } = new ConfigValue<float>("min", 10);
 		public ConfigValue<float> Max { get; } = new ConfigValue<float>("max", 75);
 	}
 

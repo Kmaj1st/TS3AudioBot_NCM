@@ -19,7 +19,6 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using TagLib.Matroska;
 using TS3AudioBot.Algorithm;
 using TS3AudioBot.Audio;
 using TS3AudioBot.CommandSystem;
@@ -48,7 +47,6 @@ using TSLib.Full;
 using TSLib.Full.Book;
 using TSLib.Helper;
 using TSLib.Messages;
-using static Org.BouncyCastle.Math.EC.ECCurve;
 
 namespace TS3AudioBot
 {
@@ -119,6 +117,7 @@ namespace TS3AudioBot
 			CommandClear(pm);
 			return await CommandFolderAdd(pm, folder);
 		}
+
 		[Command("alias add")]
 		public static void CommandAliasAdd(CommandManager commandManager, ConfBot confBot, string commandName, string command)
 		{
@@ -169,21 +168,19 @@ namespace TS3AudioBot
 		}
 
 		[Command("bot avatar set")]
-		public static async Task CommandBotAvatarSet(Ts3Client? ts3Client, string? url = null)
+		public static async Task<String> CommandBotAvatarSet(Ts3Client? ts3Client, string? uri = null)
 		{
 			if (ts3Client is null)
 			{
-				Log.Fatal("ts3Client is null");
-				return;
+				throw new NullReferenceException("ts3Client is null");
 			}
-			if (url is null) {
-				await ts3Client.SendChannelMessage("用法!bot avatar set [url]");
-				return;
+			if (uri is null) {
+				return "用法!bot avatar set [uri]";
 			}
 			try
 			{
-				url = TextUtil.ExtractUrlFromBb(url);
-				await WebWrapper.Request(url).ToAction(async x =>
+				uri = TextUtil.ExtractUrlFromBb(uri);
+				await WebWrapper.Request(uri).ToAction(async x =>
 				{
 					using var stream = await x.Content.ReadAsStreamAsync();
 					using var image = await ImageUtil.ResizeImageSave(stream);
@@ -198,6 +195,7 @@ namespace TS3AudioBot
 					avatarWarned = true;
 				}
 			}
+			return "看看我看看我！";
 		}
 
 		[Command("bot avatar clear")]
@@ -513,14 +511,10 @@ namespace TS3AudioBot
 		}
 
 		[Command("export")]
-		public static async Task<string> CommandExport(PlayManager pm, string arg = "")
+		public static string CommandExport(PlayManager pm, string arg = "")
 		{
-			return await pm.Export(arg);
+			return pm.Export(arg);
 		}
-
-		[Command("from", "_undocumented")]
-		public static async Task CommandFrom(PlayManager playManager, InvokerData invoker, string factoryName, string url)
-			=> await playManager.Play(invoker, url, factoryName);
 
 		[Command("gedan add")]
 		public static async Task<string> CommandGedanadd(PlayManager pm, string idOrName)
@@ -531,7 +525,7 @@ namespace TS3AudioBot
 			}
 			catch (Exception e)
 			{
-				Log.Error("[MainCommands.CommandGedanadd]" + e.ToString());
+				Log.Error($"[MainCommands.CommandGedanadd] {e}");
 				return "添加歌单失败";
 			}
 		}
@@ -545,8 +539,8 @@ namespace TS3AudioBot
 			}
 			catch (Exception e)
 			{
-				Log.Error($"[MainCommands.CommandGedanadd] {e.ToString()}");
-				return $"设置歌单失败, {e.ToString()}";
+				Log.Error($"[MainCommands.CommandGedanadd] {e}");
+				return $"设置歌单失败";
 			}
 		}
 
@@ -699,7 +693,7 @@ namespace TS3AudioBot
 		}
 
 		[Command("history add")]
-		public static async Task CommandHistoryQueue(HistoryManager historyManager, PlayManager playManager, InvokerData invoker, uint hid)
+		public static async Task CommandHistoryQueue(HistoryManager historyManager, PlayManager playManager, ClientCall invoker, uint hid)
 		{
 			var ale = historyManager.GetEntryById(hid).UnwrapThrow();
 			await playManager.Enqueue(invoker, ale.AudioResource);
@@ -821,7 +815,7 @@ namespace TS3AudioBot
 		}
 
 		[Command("history last", "cmd_history_last_help")]
-		public static async Task CommandHistoryLast(HistoryManager historyManager, PlayManager playManager, InvokerData invoker)
+		public static async Task CommandHistoryLast(HistoryManager historyManager, PlayManager playManager, ClientCall invoker)
 		{
 			var ale = historyManager.Search(new SeachQuery { MaxResults = 1 }).FirstOrDefault();
 			if (ale is null)
@@ -830,7 +824,7 @@ namespace TS3AudioBot
 		}
 
 		[Command("history play")]
-		public static async Task CommandHistoryPlay(HistoryManager historyManager, PlayManager playManager, InvokerData invoker, uint hid)
+		public static async Task CommandHistoryPlay(HistoryManager historyManager, PlayManager playManager, ClientCall invoker, uint hid)
 		{
 			var ale = historyManager.GetEntryById(hid).UnwrapThrow();
 			await playManager.Play(invoker, ale.AudioResource);
@@ -939,15 +933,30 @@ namespace TS3AudioBot
 			return index;
 		}
 
-		[Command("import")]
-		public static async Task<string> CommandImport(PlayManager pm, string? arg = null)
+		[Command("import set")]
+		[Usage ("<歌单文件名>", "导入歌单文件并设置为当前播放清单")]
+		public static string CommandImport(PlayManager pm, string? arg = null)
 		{
 			if (arg == null)
 			{
 				return CommandLists(pm, arg);
 			} else
 			{
-				return await pm.Import(arg);
+				return pm.Import(arg);
+			}
+		}
+
+		[Command("import add")]
+		[Usage ("<歌单文件名>", "导入歌单文件并添加至当前播放清单")]
+		public static string CommandImportAdd(PlayManager pm, string? arg = null)
+		{
+			if (arg == null)
+			{
+				return CommandLists(pm, arg);
+			}
+			else
+			{
+				return pm.Import(arg, true);
 			}
 		}
 
@@ -973,8 +982,7 @@ namespace TS3AudioBot
 				PlaybackIndex = playIndex,
 			};
 
-			return JsonValue.Create(plInfo, x =>
-			{
+			return JsonValue.Create(plInfo, x => {
 				if (x.SongCount == 0 || x.Items is null)
 					return strings.info_currently_not_playing;
 
@@ -1016,7 +1024,6 @@ namespace TS3AudioBot
 				else
 					jsonArr[i] = res;
 			}
-
 			return new JsonArray<object?>(jsonArr, string.Empty);
 		}
 
@@ -1029,7 +1036,7 @@ namespace TS3AudioBot
 		}
 
 		[Command("jump")]
-		public static async Task CommandJump(PlayManager playManager, PlaylistManager playlistManager, InvokerData invoker, string offset)
+		public static async Task CommandJump(PlayManager playManager, PlaylistManager playlistManager, ClientCall invoker, string offset)
 		{
 			playlistManager.Index = GetIndexExpression(playlistManager, offset);
 			await playManager.Play(invoker);
@@ -1071,7 +1078,7 @@ namespace TS3AudioBot
 			}
 		}
 
-		[Command("lists")]
+		[Command("lists", "lss")]
 		public static string CommandLists(PlayManager pm, string? initial = null)
 		{
 			return pm.Lists(initial);
@@ -1098,17 +1105,17 @@ namespace TS3AudioBot
 		[Command("mode")]
 		public static string CommandPlayMode(PlayManager pm, int mode = -1)
 		{
-			return pm.changeMode(mode);
+			return pm.ChangeMode(mode);
 		}
 
-		[Command("move")]
-		public static string CommandSwitch(PlayManager pm, int from, int to)
+		[Command("move", "switch")]
+		public static string CommandMove(PlayManager pm, int from, int to)
 		{
-			return pm.Switch(from, to);
+			return pm.Move(from, to);
 		}
 
 		[Command("next")]
-		public static async Task<string> CommandNext(PlayManager pm, ClientCall invoker, string? arg = null)
+		public static async Task<string> CommandNext(ClientCall invoker, Player playerConnection, PlayManager pm, string? arg = null)
 		{
 			if (arg == null)
 			{
@@ -1119,10 +1126,10 @@ namespace TS3AudioBot
 				}
 				if (!pm.IsPlaying)
 				{
-					await CommandPlay(pm, pm.PlayerConnection, invoker);
+					await CommandPlay(pm, playerConnection, invoker);
 					return "";
 				}
-				await pm.PlayNextMusic();
+				await pm.PlayNextMusic(invoker);
 			} else
 			{
 				return await CommandAdd(pm, arg);
@@ -1151,36 +1158,26 @@ namespace TS3AudioBot
 		public static void CommandPause(Player playerConnection) => playerConnection.Paused = !playerConnection.Paused;
 
 		[Command("play")]
-		public static async Task CommandPlay(PlayManager pm, Player playerConnection, InvokerData invoker)
+		public static async Task CommandPlay(PlayManager pm, Player playerConnection, ClientCall invoker)
 		{
 			if (!pm.IsPlaying)
-			{
-				pm.Invoker = invoker;
-				await pm.PlayNextMusic();
-			}
+				await pm.PlayNextMusic(invoker);
 			else
-			{
 				playerConnection.Paused = false;
-			}
 		}
 
 		[Command("play")]
-		public static async Task CommandPlay(PlayManager playManager, InvokerData invoker, string arg, params string[]? attributes)
+		public static async Task CommandPlay(PlayManager playManager, ClientCall invoker, params string[]? args)
 		{
-			if (attributes is null)
-			{
-				await playManager.Play(invoker, arg);
-			}
-			else
-			{
-				await playManager.Play(invoker, arg, meta: PlayManager.ParseAttributes(attributes));
-			}
+			await playManager.Play(invoker, args);
 		}
-		
-		[Command("play")]
-		public static async Task CommandPlay(PlayManager playManager, InvokerData invoker, IAudioResourceResult rsc, params string[] attributes)
-			=> await playManager.Play(invoker, rsc.AudioResource, meta: PlayManager.ParseAttributes(attributes));
 
+		[Command("play")]
+		public static async Task CommandPlay(PlayManager playManager, ClientCall invoker, IAudioResourceResult rsc, params string[] attributes)
+		{
+			(string? _, PlayInfo? meta) = PlayManager.ParseArgs(attributes);
+			await playManager.Play(invoker, rsc.AudioResource, meta);
+		}
 		[Command("plugin list")]
 		public static JsonArray<PluginStatusInfo> CommandPluginList(PluginManager pluginManager, Bot? bot = null)
 			=> new JsonArray<PluginStatusInfo>(pluginManager.GetPluginOverview(bot), PluginManager.FormatOverview);
@@ -1202,7 +1199,7 @@ namespace TS3AudioBot
 		}
 
 		[Command("previous")]
-		public static async Task CommandPrevious(PlayManager playManager, InvokerData invoker)
+		public static async Task CommandPrevious(PlayManager playManager, ClientCall invoker)
 			=> await playManager.Previous(invoker);
 
 		[Command("print")]
@@ -1234,6 +1231,14 @@ namespace TS3AudioBot
 			if (playManager.IsPlaying)
 				await bot.GenerateStatusImage(true, playManager.CurrentPlayData);
 			await bot.UpdateBotStatus();
+		}
+
+		[Command("remove", "rm")]
+		public static String CommandRemove(PlayManager pm, string arg)
+		{
+			if (String.IsNullOrWhiteSpace(arg)) return "请输入想移除的曲目id";
+			if (int.TryParse(arg, out int i)) return pm.Remove(i);
+			return "请输入整数";
 		}
 
 		[Command("rights can")]
@@ -1296,7 +1301,7 @@ namespace TS3AudioBot
 		[Command("status")]
 		public static async Task<string> CommandStatusAsync(PlayManager playManager)
 		{
-			string? api = playManager.NeteaseAPI;
+			string? api = playManager.NcmApi;
 			if (api is null)
 			{
 				Log.Error("api is null");
@@ -1309,7 +1314,7 @@ namespace TS3AudioBot
 				return "header is null";
 			}
 
-			string result = $"\n网易云API: {playManager.NeteaseAPI}\n当前用户: ";
+			string result = $"\n网易云API: {playManager.NcmApi}\n当前用户: ";
 			result = await CheckNCMStatus(api, header, result);
 
 			return result;
@@ -1388,7 +1393,7 @@ namespace TS3AudioBot
 			});
 
 		[Command("search add", "_undocumented")] // TODO Doc
-		public static async Task CommandSearchAdd(PlayManager playManager, InvokerData invoker, UserSession session, int index)
+		public static async Task CommandSearchAdd(PlayManager playManager, ClientCall invoker, UserSession session, int index)
 			=> await playManager.Enqueue(invoker, session.GetSingleSearchResult(index));
 
 		[Command("search from", "_undocumented")] // TODO Doc
@@ -1588,7 +1593,7 @@ namespace TS3AudioBot
 		}
 
 		[Command("stop")]
-		public static void CommandStop(PlayManager playManager) => playManager.Stop();
+		public static void CommandStop(ClientCall invoker, PlayManager playManager) => playManager.Stop();
 
 		[Command("subscribe")]
 		public static void CommandSubscribe(IVoiceTarget targetManager, ClientCall invoker)

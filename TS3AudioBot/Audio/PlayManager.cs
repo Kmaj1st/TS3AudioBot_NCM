@@ -8,16 +8,13 @@
 // program. If not, see <https://opensource.org/licenses/OSL-3.0>.
 
 using NeteaseApiData;
-using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Net.Http;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using TS3AudioBot.Config;
@@ -29,7 +26,6 @@ using TS3AudioBot.ResourceFactories;
 using TSLib.Full;
 using TSLib.Helper;
 using TSLib.Messages;
-using static Org.BouncyCastle.Math.EC.ECCurve;
 
 namespace TS3AudioBot.Audio
 {
@@ -39,7 +35,7 @@ namespace TS3AudioBot.Audio
 		private static readonly NLog.Logger Log = NLog.LogManager.GetCurrentClassLogger();
 
 		private readonly ConfBot confBot;
-		public Player PlayerConnection { get; private set; }
+		private Player playerConnection;
 		private readonly PlaylistManager playlistManager;
 		private readonly ResolveContext resourceResolver;
 		private readonly Stats stats;
@@ -58,56 +54,60 @@ namespace TS3AudioBot.Audio
 		private readonly SemaphoreSlim slimlock = new SemaphoreSlim(1, 1);
 		private System.Threading.Timer? timer;
 		private Ts3Client? ts3Client;
+		private TsFullClient? tsFullClient;
 
-		public MusicInfo? CurrentMusicInfo { get; private set; }
-		private int currentPlay;
-		public Dictionary<string, string>? Header { get; private set; }
-		public List<MusicInfo> MusicInfoList { get; set; } = new List<MusicInfo>();
-		public Mode Mode { get; private set; }
-		public string? NeteaseAPI { get; private set; }
-		public InvokerData? Invoker { get; set; }
-		public PlayListMeta? PlayListMeta { get; set; }
-		public TsFullClient? Ts3FullClient { get; private set; }
 		public YunConfig? yunConf;
 
-		readonly string SongListsDir = "./songlists/";
-		readonly string DeletedDirectoryDir = "./songlists/deleted/";
+		public string? NcmApi { get; private set; }
+		public Dictionary<string, string>? Header { get; private set; }
+		public string? DefaultImage { get; private set; }
+		readonly string SongListsDir = "songlists/";
+		readonly string DeletedSongListDir = "songlists/deleted/";
+		readonly string SongListFileExtention = ".yaml";
+
+		public int CurrentPlay { get; private set; }
+		public  MusicInfo? CurrentMusicInfo { get; private set; }
+		public Mode Mode { get; private set; }
+		public List<MusicInfo> MusicInfoList { get; private set; } = new List<MusicInfo>();
+		public PlayListMeta? PlayListMeta { get; private set; }
 
 		public PlayManager(ConfBot config, Player playerConnection, PlaylistManager playlistManager, ResolveContext resourceResolver, Stats stats)
 		{
 			confBot = config;
-			this.PlayerConnection = playerConnection;
+			this.playerConnection = playerConnection;
 			this.playlistManager = playlistManager;
 			this.resourceResolver = resourceResolver;
 			this.stats = stats;
 		}
 
-		public async Task Add(string link, string? audioType = null, PlayInfo? meta = null)
+		public async Task<string> Add(string link, PlayInfo? meta = null)
 		{
 			if (ts3Client is null)
 			{
-				Log.Fatal("[PlayManager.SetAvatarAndDesc] ts3Client is null");
-				return;
+				Log.Fatal("[PlayManager.Add] ts3Client is null");
+				return "ts3Client is null";
 			}
 
 			MusicInfo? musicInfo = await GetMusicInfo(link, meta);
 			if (musicInfo is null)
 			{
 				Log.Warn($"[PlayManager.Play] musicInfo (of {link}) is null");
-				return;
+				return "failed: musicInfo (of {link}) is null";
 			}
 			//AddMusic(musicInfo, false);
 			AddMusic(musicInfo);
+			return $"{musicInfo.GetFullNameBBCode()}";
 		}
 		public async Task<string> AddFolder(string folder)
 		{
+			if (ts3Client is null) throw new NullReferenceException(nameof(ts3Client));
 			string[] files = Directory.GetFiles(folder);
-
+			string songNames= "";
 			foreach (string file in files)
 			{
-				await Add(file);
+				songNames += $"{await Add(file)}, ";
 			}
-			return $"已添加{Path.GetFileName(folder)} [{files.Length}]";
+			return $"已添加{Path.GetFileName(folder)} [{files.Length}], {songNames}";
 		}
 
 		public void AddMusic(MusicInfo musicInfo, bool insert = false, int num = 0)
@@ -126,24 +126,20 @@ namespace TS3AudioBot.Audio
 				Log.Error("[PlayManager.CheckOwnChannel] yunConf is null");
 				return;
 			}
-			if (!yunConf.autoPause)
+			if (!yunConf.AutoPause)
 			{
 				return;
 			}
 			if (ownChannelClients.Count < 1)
 			{
-				PlayerConnection.Paused = true;
+				playerConnection.Paused = true;
 			}
 			else
 			{
-				PlayerConnection.Paused = false;
+				playerConnection.Paused = false;
 			}
 			Log.Info("ownChannelClients: {}", ownChannelClients.Count);
 		}
-
-
-
-
 
 		public Task Enqueue(InvokerData invoker, AudioResource ar, PlayInfo? meta = null) => Enqueue(invoker, new PlaylistItem(ar, meta));
 		public async Task Enqueue(InvokerData invoker, string message, string? audioType = null, PlayInfo? meta = null)
@@ -170,64 +166,38 @@ namespace TS3AudioBot.Audio
 			return PostEnqueue(invoker, startOff);
 		}
 
-		public async Task<string> Export(string filename)
+		public string Export(string filename)
 		{
-			if (String.IsNullOrEmpty(filename)) return "导出歌单: !export [歌单名]";
+			if (string.IsNullOrEmpty(filename)) return "!export [歌单名]";
+			if (!Directory.Exists(SongListsDir)) Directory.CreateDirectory(SongListsDir);
+			if (!Directory.Exists(DeletedSongListDir)) Directory.CreateDirectory(DeletedSongListDir);
+			var path = $"{SongListsDir}{filename}{SongListFileExtention}";
+			var backupPath = $"{DeletedSongListDir}{filename}";
+			if (File.Exists(path)) {
+				if (File.Exists(backupPath)) File.Delete(backupPath);
+				File.Move(path, backupPath);
+			}
 			try
 			{
-				string filePath = SongListsDir + filename + ".json";
-
-				string deletedFilePath = DeletedDirectoryDir + filename + ".json";
-
-				if (!Directory.Exists(SongListsDir))
-				{
-					Directory.CreateDirectory(SongListsDir);
-				}
-				if (!Directory.Exists(DeletedDirectoryDir))
-				{
-					Directory.CreateDirectory(DeletedDirectoryDir);
-				}
-
-				if (File.Exists(filePath))
-				{
-					if (File.Exists(deletedFilePath))
-					{
-						File.Delete(deletedFilePath);
-					}
-					File.Move(filePath, deletedFilePath);
-				}
-				
-				if (MusicInfoList == null || MusicInfoList.Count == 0)
-				{
-					return "歌单为空, 拒绝导出";
-				}
-
-				var exportData = new
-				{
-					Meta = PlayListMeta,
-					MusicList = MusicInfoList
-				};
-
-				string jsonString = JsonConvert.SerializeObject(exportData);
-
-				await Task.Run(() =>
-				{
-					File.WriteAllText(filePath, jsonString);
-				});
-
-				return "已导出" + filename;
-			}
-			catch (Exception ex)
+				var yaml = new YamlPlayList(Mode, MusicInfoList, PlayListMeta);
+				YamlSerialize.Serializer(yaml, $"{SongListsDir}{filename}{SongListFileExtention}");
+				return $"已导出至 {filename}";
+			} catch (Exception e)
 			{
-				return $"Error: {ex.Message}";
+				if (!File.Exists(path) && File.Exists(backupPath)) File.Move(backupPath, path);
+				return e.Message;
 			}
 		}
 
-		public async Task<MusicInfo?> GetMusicInfo(string musicStr, PlayInfo? meta = null)
+		public async Task<MusicInfo?> GetMusicInfo(string? musicStr, PlayInfo? meta = null)
 		{
 			if (ts3Client is null)
 			{
-				throw new NullReferenceException(nameof(Ts3Client));
+				throw new NullReferenceException(nameof(ts3Client));
+			}
+			if (musicStr is null)
+			{
+				return null;
 			}
 			if (musicStr.Contains("#"))
 			{
@@ -270,8 +240,9 @@ namespace TS3AudioBot.Audio
 			string? songID = Utils.ExtractIdFromAddress(args);
 			if (!Utils.IsNumber(songID))
 			{
-				string? urlSearch = $"{NeteaseAPI}/search?keywords={args}&limit=1";
+				string? urlSearch = $"{NcmApi}/search?keywords={args}&limit=1";
 				YunSearchSong? yunSearchSong = await Utils.HttpGetAsync<YunSearchSong>(urlSearch);
+				if (yunSearchSong is null || yunSearchSong.result is null) return null;
 				if (yunSearchSong.result.songs.Length == 0)
 				{
 					if (ts3Client is null)
@@ -327,13 +298,13 @@ namespace TS3AudioBot.Audio
 			return null;
 		}
 
-		public async Task Init(TsFullClient ts3FullClient, Ts3Client ts3client, Player player)
+		public async Task Init(TsFullClient tsFullClient, Ts3Client ts3Client, Player player)
 		{
 			string msg;
 			try
 			{
-				List<string> joiningMsg = new List<string>(File.ReadAllLines("config/joiningmsg.txt"));		
-				Random random = new Random();
+				var joiningMsg = new List<string>(File.ReadAllLines("config/joiningmsg.txt"));
+				var random = new Random();
 				int index = random.Next(joiningMsg.Count);
 				msg = joiningMsg[index];
 			}
@@ -344,73 +315,54 @@ namespace TS3AudioBot.Audio
 
 			LoadNCMConfig();
 
-			this.Ts3FullClient = ts3FullClient;
-			this.ts3Client = ts3client;
-			this.PlayerConnection = player;
+			this.tsFullClient = tsFullClient;
+			this.ts3Client = ts3Client;
+			this.playerConnection = player;
 
-			if (this.Ts3FullClient is null)
+			if (this.ts3Client is null || this.playerConnection is null)
+			{
+				Log.Error("ts3Client or playerConnection is null");
+				return;
+			}
+
+			if (this.tsFullClient is null)
 			{
 				Log.Error("failed to add EventHandler for TSFullCliet");
 				return;
 			} else
 			{
-				ts3FullClient.OnEachClientLeftView += OnEachClientLeftView;
-				ts3FullClient.OnEachClientEnterView += OnEachClientEnterView;
-				ts3FullClient.OnEachClientMoved += OnEachClientMoved;
+				await UpdateOwnChannel();
+				tsFullClient.OnEachClientEnterView += OnEachClientEnterView;
+				tsFullClient.OnEachClientLeftView += OnEachClientLeftView;
+				tsFullClient.OnEachClientMoved += OnEachClientMoved;
 			}
-
-			await ts3Client.SendChannelMessage(msg);
+			Log.Info(msg);
+			await this.ts3Client.SendChannelMessage(msg);
 		}
 
-		public async Task<string> Import(string filename)
+		public string Import(string filename, bool add = false)
 		{
 			try
 			{
-				string filePath = SongListsDir + filename + ".json";
-				var list = new List<MusicInfo>();
-				PlayListMeta? meta = null;
-
-				if (!File.Exists(filePath))
+				var yaml = YamlSerialize.Deserializer<YamlPlayList>($"{SongListsDir}{filename}{SongListFileExtention}");
+				Mode = yaml.Mode;
+				List<MusicInfo> tmpMusicInfoList = yaml.MusicInfoList;
+				PlayListMeta = yaml.PlayListMeta;
+				if (add)
 				{
-					return "无法找到歌单文件";
+					foreach (var musicInfo in tmpMusicInfoList)
+					{
+						AddMusic(musicInfo, true);
+					}
+				} else
+				{
+					MusicInfoList = tmpMusicInfoList;
 				}
-
-				await Task.Run(() =>
-				{
-					try
-					{
-						string jsonString = File.ReadAllText(filePath);
-						var importData = JsonConvert.DeserializeObject<Dictionary<string, object>>(jsonString);
-
-						if (importData != null)
-						{
-#pragma warning disable CS8604 // Possible null reference argument.
-							meta = importData["Meta"] is null ? null : JsonConvert.DeserializeObject<PlayListMeta?>(importData["Meta"].ToString());
-
-							list = JsonConvert.DeserializeObject<List<MusicInfo>>(importData["MusicList"].ToString());
-#pragma warning restore CS8604 // Possible null reference argument.
-						}
-						else
-						{
-							Log.Warn("[PlayManager.Import] importData is null.");
-						}
-					}
-					catch (Exception ex)
-					{
-						Log.Error($"[PlayManager.Import] {ex}");
-					}
-				});
-
-				PlayListMeta = meta;
-				MusicInfoList = list;
-
-				return "已导入" + filename;
-			}
-			catch (Exception e)
+			} catch(Exception e)
 			{
-				Log.Error($"[PlayManager.Import] {e}");
-				return "哎呀, 导入过程中出现了一点小问题xD";
+				return e.Message;
 			}
+			return $"已导入 {filename}";
 		}
 
 		public string Lists(string? initial = null)
@@ -462,7 +414,7 @@ namespace TS3AudioBot.Audio
 				{
 					Log.Info("Linux env detected");
 				}
-				Assembly? assembly = Assembly.GetEntryAssembly();
+				var assembly = Assembly.GetEntryAssembly();
 				if (assembly is null)
 				{
 					Log.Error("[PlayManager.LoadNCMConfig] assembly is null");
@@ -476,11 +428,12 @@ namespace TS3AudioBot.Audio
 				yunConf = YunConfig.GetConfig("config/NCMSettings.yml");
 			}
 
-
 			Header = yunConf.Header;
+			DefaultImage = yunConf.DefaultImage;
+
 			try
 			{
-				Mode = (Mode)yunConf.playMode;
+				Mode = yunConf.PlayMode;
 			}
 			catch (Exception e)
 			{
@@ -488,22 +441,21 @@ namespace TS3AudioBot.Audio
 				Mode = Mode.SeqPlay;
 			}
 
-			 NeteaseAPI = yunConf.neteaseApi;
-
+			NcmApi = yunConf.NcmApi;
 
 			timer?.Dispose();
 
-			if (yunConf.cookieUpdateIntervalMin <= 0)
+			if (yunConf.CookieUpdateIntervalMin <= 0)
 			{
 				timer = new System.Threading.Timer(async (e) =>
 				{
-					if (!yunConf.isQrlogin && Header.ContainsKey("Cookie") && !string.IsNullOrEmpty(Header["Cookie"]))
+					if (!yunConf.IsQrlogin && Header.ContainsKey("Cookie") && !string.IsNullOrEmpty(Header["Cookie"]))
 					{
 						try
 						{
-							string? url = $"{NeteaseAPI}/login/refresh?t={Utils.GetTimeStamp()}";
+							string? url = $"{NcmApi}/login/refresh?t={Utils.GetTimeStamp()}";
 							Status1? status = await Utils.HttpGetAsync<Status1>(url, Header);
-							if (status.code == 200)
+							if (status.code == 200 && status.cookie != null)
 							{
 								var newCookie = Utils.MergeCookie(Header["Cookie"], status.cookie);
 								ChangeCookies(newCookie, false);
@@ -519,7 +471,7 @@ namespace TS3AudioBot.Audio
 							Log.Error(ex, "Cookie update error");
 						}
 					}
-				}, null, TimeSpan.Zero.Milliseconds, TimeSpan.FromMinutes(yunConf.cookieUpdateIntervalMin).Milliseconds);
+				}, null, TimeSpan.Zero.Milliseconds, TimeSpan.FromMinutes(yunConf.CookieUpdateIntervalMin).Milliseconds);
 			}
 
 			Log.Info("Yun Plugin loaded");
@@ -528,14 +480,14 @@ namespace TS3AudioBot.Audio
 			{
 				Log.Info($"Header: {Header.Keys.ElementAt(i)}: {Header.Values.ElementAt(i)}");
 			}
-			Log.Info($"Api address: {NeteaseAPI}");
-			if (yunConf.cookieUpdateIntervalMin <= 0)
+			Log.Info($"Api address: {NcmApi}");
+			if (yunConf.CookieUpdateIntervalMin <= 0)
 			{
 				Log.Info("Cookie update disabled");
 			}
 			else
 			{
-				Log.Info($"Cookie update interval: {yunConf.cookieUpdateIntervalMin} min");
+				Log.Info($"Cookie update interval: {yunConf.CookieUpdateIntervalMin} min");
 			}
 		}
 
@@ -546,13 +498,14 @@ namespace TS3AudioBot.Audio
 				Log.Error("[PlayManager.OnEachClientMoved] sender is null");
 				return;
 			}
-			if (Ts3FullClient is null)
+			if (tsFullClient is null)
 			{
 				Log.Error("[PlayManager.OnEachClientMoved] Ts3FullClient is null");
 				return;
 			}
-			if (e.ClientId == Ts3FullClient.ClientId)
+			if (e.ClientId == tsFullClient.ClientId)
 			{
+				ownChannelID = e.TargetChannelId.Value;
 				await UpdateOwnChannel(e.TargetChannelId.Value);
 				return;
 			}
@@ -576,12 +529,12 @@ namespace TS3AudioBot.Audio
 				Log.Error("[PlayManager.OnEachClientEnterView] sender is null");
 				return;
 			}
-			if (Ts3FullClient is null)
+			if (tsFullClient is null)
 			{
 				Log.Error("[PlayManager.OnEachClientEnterView] Ts3FullClient is null");
 				return;
 			}
-			if (e.ClientId == Ts3FullClient.ClientId) return;
+			if (e.ClientId == tsFullClient.ClientId) return;
 			if (e.TargetChannelId.Value == ownChannelID) ownChannelClients.Add(e.ClientId.Value);
 			CheckOwnChannel();
 		}
@@ -593,59 +546,57 @@ namespace TS3AudioBot.Audio
 				Log.Error("[PlayManager.OnEachClientLeftView] sender is null");
 				return;
 			}
-			if (Ts3FullClient is null)
+			if (tsFullClient is null)
 			{
 				Log.Error("[PlayManager.OnEachClientLeftView] Ts3FullClient is null");
 				return;
 			}
-			if (e.ClientId == Ts3FullClient.ClientId) return;
+			if (e.ClientId == tsFullClient.ClientId) return;
 			if (e.SourceChannelId.Value == ownChannelID) ownChannelClients.Remove(e.ClientId.Value);
 			CheckOwnChannel();
 		}
 
-		public static PlayInfo? ParseAttributes(string[] attrs)
+		public static (string?, PlayInfo?) ParseArgs(string[] args)
 		{
-			if (attrs is null || attrs.Length == 0)
-				return null;
+			string song_name = "";
+			if (args is null || args.Length == 0)
+				return (null, null);
 
 			var meta = new PlayInfo();
-			foreach (var attr in attrs)
+			foreach (var arg in args)
 			{
-				Log.Info(attr);
-				if (attr.StartsWith("@"))
+				if (arg.StartsWith("@"))
 				{
-					meta.StartOffset = TextUtil.ParseTime(attr[1..]);
-				}
-				if (attr.StartsWith("#"))
+					meta.StartOffset = TextUtil.ParseTime(arg[1..]);
+				} else if (arg.StartsWith("#"))
 				{
-					meta.AudioSource = PlayInfo.ToAudioSource(attr[1..]);
+					meta.AudioSource = PlayInfo.ToAudioSource(arg[1..]);
+				} else
+				{
+					song_name += arg.Replace("%20", "%2520") + "%20";
 				}
 			}
-			Log.Info(meta.ToString());
-			return meta;
+			if (song_name.EndsWith("%20"))
+			{
+				song_name = song_name.Substring(0, song_name.Length - 3);
+			}
+			Log.Info($"req. name={song_name}, meta={meta}");
+			return (song_name, meta);
 		}
 
-		private Task PlayManager_AfterResourceStarted(object sender, PlayInfoEventArgs value)
+		public async Task Play(InvokerData invoker, string[] args)
 		{
-			this.Invoker = value.Invoker;
-			return Task.CompletedTask;
-		}
-
-		public async Task Play(InvokerData invoker, string arg, string? audioType = null, PlayInfo? meta = null)
-		{
-			this.Invoker = invoker;
-
 			if (ts3Client is null)
 			{
 				Log.Fatal("[PlayManager.SetAvatarAndDesc] ts3Client is null");
 				throw new ArgumentNullException(nameof(ts3Client));
 			}
 
-			MusicInfo? musicInfo = await GetMusicInfo(arg, meta);
+			(string? song_name, PlayInfo? meta) = ParseArgs(args);
+			MusicInfo? musicInfo = await GetMusicInfo(song_name, meta);
 			if (musicInfo is null) { return; }
 
-			//AddMusic(musicInfo, true);
-			await PlayMusic(musicInfo);
+			await PlayMusic(invoker, musicInfo);
 		}
 
 		public async Task Play(InvokerData invoker, AudioResource ar, PlayInfo? meta = null)
@@ -750,19 +701,19 @@ namespace TS3AudioBot.Audio
 			}
 
 			Log.Debug("AudioResource start: {0}", play);
-			try { await PlayerConnection.Play(play); }
+			try { await playerConnection.Play(play); }
 			catch (AudioBotException ex)
 			{
 				Log.Error("Error return from player: {0}", ex.Message);
 				throw Error.Exception(ex).LocalStr(strings.error_playmgr_internal_error);
 			}
 
-			PlayerConnection.Volume = Tools.Clamp(PlayerConnection.Volume, confBot.Audio.Volume.Min, confBot.Audio.Volume.Max);
+			playerConnection.Volume = Tools.Clamp(playerConnection.Volume, confBot.Audio.Volume.Min, confBot.Audio.Volume.Max);
 			CurrentPlayData = playInfo; // TODO meta as readonly
 			await AfterResourceStarted.InvokeAsync(this, playInfo);
 		}
 
-		private async Task StartCurrent(InvokerData invoker, bool manually = true)
+		private async Task StartCurrent(InvokerData invoker)
 		{
 			var pli = playlistManager.Current ?? throw Error.LocalStr(strings.error_playlist_is_empty);
 			try
@@ -772,7 +723,7 @@ namespace TS3AudioBot.Audio
 			catch (AudioBotException ex)
 			{
 				Log.Warn("Skipping: {0} because {1}", pli, ex.Message);
-				await PlayNextMusic();
+				await PlayNextMusic(invoker);
 			}
 		}
 
@@ -786,14 +737,14 @@ namespace TS3AudioBot.Audio
 			{
 				try
 				{
-					await PlayNextMusic();
+					await PlayNextMusic(CurrentPlayData?.Invoker ?? InvokerData.Anonymous);
 					return;
 				}
 				catch (AudioBotException ex) { Log.Info("Song queue ended: {0}", ex.Message); }
 			}
 			else
 			{
-				PlayerConnection.Stop();
+				playerConnection.Stop();
 			}
 
 			CurrentPlayData = null;
@@ -802,12 +753,12 @@ namespace TS3AudioBot.Audio
 
 		private async Task UpdateOwnChannel(ulong channelID = 0)
 		{
-			if (Ts3FullClient is null)
+			if (tsFullClient is null)
 			{
 				Log.Error("[PlayManager.UpdateOwnChannel] Ts3FullClient is null");
 				return;
 			}
-			R<WhoAmI, CommandError> who = await Ts3FullClient.WhoAmI();
+			R<WhoAmI, CommandError> who = await tsFullClient.WhoAmI();
 			if (who.Value is null)
 			{
 				throw new NullReferenceException();
@@ -815,7 +766,7 @@ namespace TS3AudioBot.Audio
 			if (channelID < 1) channelID = who.Value.ChannelId.Value;
 			ownChannelID = channelID;
 			ownChannelClients.Clear();
-			R<ClientList[], CommandError> r = await Ts3FullClient.ClientList();
+			R<ClientList[], CommandError> r = await tsFullClient.ClientList();
 			if (!r)
 			{
 				throw new Exception($"Clientlist failed ({r.Error.ErrorFormat()})");
@@ -824,7 +775,7 @@ namespace TS3AudioBot.Audio
 			{
 				if (client.ChannelId.Value == channelID)
 				{
-					if (client.ClientId == Ts3FullClient.ClientId) continue;
+					if (client.ClientId == tsFullClient.ClientId) continue;
 					ownChannelClients.Add(client.ClientId.Value);
 				}
 			}
@@ -871,8 +822,8 @@ namespace TS3AudioBot.Audio
 		{
 			PlayListMeta = meta;
 			MusicInfoList = new List<MusicInfo>(list);
-			currentPlay = 0;
-			if (Mode == Mode.RandomPlay || Mode == Mode.RandomLoopPlay)
+			CurrentPlay = 0;
+			if (Mode == Mode.RandomPlay || Mode == Mode.RandomLoop)
 			{
 				Utils.ShuffleArrayList(MusicInfoList);
 			}
@@ -883,9 +834,9 @@ namespace TS3AudioBot.Audio
 			Utils.ShuffleArrayList(MusicInfoList);
 		}
 
-		public async Task PlayMusic(MusicInfo musicInfo)
+		public async Task PlayMusic(InvokerData invoker, MusicInfo musicInfo)
 		{
-			if (NeteaseAPI is null || Header is null)
+			if (NcmApi is null || Header is null)
 			{
 				Log.Error("[PlayManager.PlayMusic] neteaseApi is null || header is null");
 				return;
@@ -893,8 +844,8 @@ namespace TS3AudioBot.Audio
 			string desc;
 			try
 			{
-				await musicInfo.InitMusicInfo(NeteaseAPI, Header);
-				string? musicUrl = await musicInfo.GetURL(NeteaseAPI, Header);
+				await musicInfo.InitMusicInfo(NcmApi, Header);
+				string? musicUrl = await musicInfo.GetURL(NcmApi, Header);
 				Log.Info($"Music name: {musicInfo.Name}, picUrl: {musicInfo.Image}, url: {musicUrl}");
 				if (musicUrl is null)
 				{
@@ -913,12 +864,12 @@ namespace TS3AudioBot.Audio
 					{
 						await ts3Client.SendChannelMessage($"音乐链接获取失败 [{musicInfo.Name}] {musicUrl}");
 					}
-					await PlayNextMusic();
+					await PlayNextMusic(invoker);
 					return;
 				}
 
 				CurrentMusicInfo = musicInfo;
-				await Play(Invoker, new MediaPlayResource(musicUrl, await musicInfo.GetAudioResource(), await musicInfo.GetImage(), false));
+				await Play(invoker, new MediaPlayResource(musicUrl, await musicInfo.GetAudioResource(), await musicInfo.GetImage(DefaultImage), false));
 
 				if (ts3Client is null)
 				{
@@ -930,7 +881,7 @@ namespace TS3AudioBot.Audio
 
 				if (musicInfo.InPlayList)
 				{
-					desc = $"[{currentPlay}/{MusicInfoList.Count}] {musicInfo.GetFullName()}";
+					desc = $"[{CurrentPlay}/{MusicInfoList.Count}] {musicInfo.GetFullName()}";
 				}
 				else
 				{
@@ -944,7 +895,7 @@ namespace TS3AudioBot.Audio
 				{
 					await ts3Client.SendChannelMessage($"播放音乐失败 [{musicInfo.Name}]");
 				}
-				await PlayNextMusic();
+				await PlayNextMusic(invoker);
 				return;
 			}
 			CurrentMusicInfo = musicInfo;
@@ -953,7 +904,7 @@ namespace TS3AudioBot.Audio
 			await MainCommands.CommandBotAvatarSet(ts3Client, musicInfo.Image);
 		}
 
-		public async Task PlayNextMusic()
+		public async Task PlayNextMusic(InvokerData invoker)
 		{
 			if (MusicInfoList.Count == 0)
 			{
@@ -967,35 +918,42 @@ namespace TS3AudioBot.Audio
 			}
 			MusicInfo musicInfo = GetNextMusic();
 			CurrentMusicInfo = musicInfo;
-			await Play(Invoker, await GetPlayObject(musicInfo));
+			await Play(invoker, await GetPlayObject(invoker, musicInfo));
 		}
 
-		public void ChangeCookies(string cookies, bool isQrlogin)
+		public void ChangeCookies(string? cookies, bool isQrlogin)
 		{
-			if (Header is null || yunConf is null)
+			if (Header is null)
 			{
-				Log.Error("[PlayManager.ChangeCookies] header is null || yunConf is null");
-				return;
+				throw new NullReferenceException(nameof(Header));
+			}
+			if (yunConf is null)
+			{
+				throw new NullReferenceException(nameof(yunConf));
+			}
+			if (cookies is null)
+			{
+				throw new NullReferenceException(nameof(cookies));
 			}
 			Console.WriteLine(cookies);
 			var cookie = Utils.ProcessCookie(cookies);
 			Header["Cookie"] = cookie;
 			yunConf.Header["Cookie"] = cookie;
-			yunConf.isQrlogin = isQrlogin;
+			yunConf.IsQrlogin = isQrlogin;
 			yunConf.Save();
 		}
 
-		public string changeMode(int mode)
+		public string ChangeMode(int mode = -1)
 		{
 			if (mode == -1)
 			{
-				return "播放模式选择【0=顺序播放 1=顺序循环 2=随机 3=随机循环";
+				return "播放模式选择 【0=顺序 1=顺序循环 2=随机 3=随机循环】";
 			}
 			if (Enum.IsDefined(typeof(Mode), mode))
 			{
 				this.Mode = (Mode)mode;
 				if (yunConf is null) return "yunConf is null";
-				yunConf.playMode = this.Mode;
+				yunConf.PlayMode = this.Mode;
 				yunConf.Save();
 
 				return (this.Mode switch
@@ -1003,7 +961,7 @@ namespace TS3AudioBot.Audio
 					Mode.SeqPlay => "当前播放模式为顺序播放",
 					Mode.SeqLoopPlay => "当前播放模式为顺序循环",
 					Mode.RandomPlay => "当前播放模式为随机播放",
-					Mode.RandomLoopPlay => "当前播放模式为随机循环",
+					Mode.RandomLoop => "当前播放模式为随机循环",
 					_ => "请输入正确的播放模式",
 				});
 			}
@@ -1015,7 +973,7 @@ namespace TS3AudioBot.Audio
 
 		public async Task<Status1> CheckLoginStatus(string key)
 		{
-			return await Utils.HttpGetAsync<Status1>($"{this.NeteaseAPI}/login/qr/check?key={key}&timestamp={Utils.GetTimeStamp()}");
+			return await Utils.HttpGetAsync<Status1>($"{this.NcmApi}/login/qr/check?key={key}&timestamp={Utils.GetTimeStamp()}");
 		}
 
 		public void ClearSongList()
@@ -1033,13 +991,13 @@ namespace TS3AudioBot.Audio
 			{
 				return null;
 			}
-			GeDan? Gedans = await Utils.HttpGetAsync<GeDan>($"{NeteaseAPI}/playlist/track/all?id={gedanDetail.playlist.id}", Header);
+			GeDan? Gedans = await Utils.HttpGetAsync<GeDan>($"{NcmApi}/playlist/track/all?id={gedanDetail.playlist.id}", Header);
 			long? numOfSongs = Gedans.songs.Count();
 			if (numOfSongs > 100)
 			{
 				await ts3Client.SendChannelMessage($"警告：歌单过大，可能需要一定的时间生成 [{numOfSongs}]");
 			}
-			List<MusicInfo> gedanMusicInfoList = new List<MusicInfo>();
+			var gedanMusicInfoList = new List<MusicInfo>();
 			for (int i = 0; i < numOfSongs; i++)
 			{
 				long? musicid = Gedans.songs[i].id;
@@ -1076,7 +1034,7 @@ namespace TS3AudioBot.Audio
 				}
 			}
 
-			return "歌单添加完毕：" + gedanDetail.playlist.name + " [" + gedanMusicInfoList.Count.ToString() + "]";
+			return $"歌单添加完毕： {gedanDetail.playlist.name}[{ gedanMusicInfoList.Count}";
 		}
 
 		public async Task<string> GedanSet(string idOrName)
@@ -1107,15 +1065,15 @@ namespace TS3AudioBot.Audio
 			return await GetGedanMusicInfoList(gedanDetail);
 		}
 
-		public async Task<string> GetLoginKey()
+		public async Task<string?> GetLoginKey()
 		{
-			LoginKey? loginKey = await Utils.HttpGetAsync<LoginKey>($"{this.NeteaseAPI}/login/qr/key?timestamp={Utils.GetTimeStamp()}");
+			LoginKey? loginKey = await Utils.HttpGetAsync<LoginKey>($"{this.NcmApi}/login/qr/key?timestamp={Utils.GetTimeStamp()}");
 			return loginKey.data.unikey;
 		}
 
-		public async Task<string> GetLoginQRImage(string key)
+		public async Task<string?> GetLoginQRImage(string? key)
 		{
-			LoginImg? loginImg = await Utils.HttpGetAsync<LoginImg>($"{this.NeteaseAPI}/login/qr/create?key={key}&qrimg=true&timestamp={Utils.GetTimeStamp()}");
+			LoginImg? loginImg = await Utils.HttpGetAsync<LoginImg>($"{this.NcmApi}/login/qr/create?key={key}&qrimg=true&timestamp={Utils.GetTimeStamp()}");
 			return loginImg.data.qrimg;
 		}
 
@@ -1128,22 +1086,22 @@ namespace TS3AudioBot.Audio
 		{
 			MusicInfo? result = MusicInfoList[0];
 			MusicInfoList.RemoveAt(0);
-			if (Mode == Mode.SeqLoopPlay || Mode == Mode.RandomLoopPlay) // 循环的重新加入列表
+			if (Mode == Mode.SeqLoopPlay || Mode == Mode.RandomLoop) // 循环的重新加入列表
 			{
 				MusicInfoList.Add(result);
-				currentPlay += 1;
+				CurrentPlay += 1;
 			}
 			else
 			{
-				currentPlay = 1; // 不是循环播放就固定当前播放第一首
+				CurrentPlay = 1; // 不是循环播放就固定当前播放第一首
 			}
 
-			if (Mode == Mode.RandomLoopPlay)
+			if (Mode == Mode.RandomLoop)
 			{
-				if (currentPlay >= MusicInfoList.Count)
+				if (CurrentPlay >= MusicInfoList.Count)
 				{
 					Utils.ShuffleArrayList(MusicInfoList);
-					currentPlay = 1; // 重排了就从头开始
+					CurrentPlay = 1; // 重排了就从头开始
 				}
 			}
 
@@ -1169,19 +1127,34 @@ namespace TS3AudioBot.Audio
 		{
 			if (string.IsNullOrEmpty(idOrName)) return null;
 			if (Header is null || ts3Client is null) throw new NullReferenceException();
-			string listId = Utils.ExtractIdFromAddress(idOrName);
-			if (!Utils.IsNumber(listId))
+
+			string? listId;
+			if (idOrName.Contains("music.163.com"))
 			{
-				string urlSearch = $"{NeteaseAPI}/search?keywords={idOrName}&limit=1&type=1000";
-				SearchGedan searchgedan = await Utils.HttpGetAsync<SearchGedan>(urlSearch);
-				if (searchgedan.result.playlists.Length == 0)
+				try
 				{
-					await ts3Client.SendChannelMessage("无法找到歌单");
+					listId = idOrName.Split('=')[1];
+				} catch {
 					return null;
 				}
-				listId = searchgedan.result.playlists[0].id.ToString();
+			} else
+			{
+
+				listId = Utils.ExtractIdFromAddress(idOrName);
+				if (!Utils.IsNumber(listId))
+				{
+					string urlSearch = $"{NcmApi}/search?keywords={idOrName}&limit=1&type=1000";
+					SearchGedan searchgedan = await Utils.HttpGetAsync<SearchGedan>(urlSearch);
+					if (searchgedan.result.playlists.Length == 0)
+					{
+						await ts3Client.SendChannelMessage("无法找到歌单");
+						return null;
+					}
+					listId = searchgedan.result.playlists[0].id.ToString();
+				}
 			}
-			return await Utils.HttpGetAsync<GedanDetail>($"{this.NeteaseAPI}/playlist/detail?id={listId}&timestamp={Utils.GetTimeStamp()}", Header);
+			if (string.IsNullOrEmpty(listId)) return null;
+			return await Utils.HttpGetAsync<GedanDetail>($"{this.NcmApi}/playlist/detail?id={listId}&timestamp={Utils.GetTimeStamp()}", Header);
 		}
 
 		public async Task<string> GetPlayListString(int limit = 3)
@@ -1201,7 +1174,7 @@ namespace TS3AudioBot.Audio
 				Mode.SeqPlay => "顺序播放",
 				Mode.SeqLoopPlay => "当顺序循环",
 				Mode.RandomPlay => "随机播放",
-				Mode.RandomLoopPlay => "随机循环",
+				Mode.RandomLoop => "随机循环",
 				_ => $"未知模式{Mode}",
 			};
 			descBuilder.AppendLine($"当前播放模式：{modeStr}");
@@ -1215,7 +1188,7 @@ namespace TS3AudioBot.Audio
 			{
 				descBuilder.Append($"[URL=https://music.163.com/#/playlist?id={PlayListMeta.NCMId}]{PlayListMeta.Name}[/URL] ");
 			}
-			descBuilder.AppendLine($"[{currentPlay}/{MusicInfoList.Count}]");
+			descBuilder.AppendLine($"[{CurrentPlay}/{MusicInfoList.Count}]");
 
 			for (var i = 0; i < nextPlayList.Count; i++)
 			{
@@ -1225,7 +1198,7 @@ namespace TS3AudioBot.Audio
 					descBuilder.AppendLine($"{i + 1}: {music.GetURLFileName()}");
 				} else
 				{
-					await music.InitMusicInfo(NeteaseAPI, Header);
+					await music.InitMusicInfo(NcmApi, Header);
 					descBuilder.AppendLine($"{i + 1}: {music.GetFullNameBBCode()}");
 				}
 			}
@@ -1233,7 +1206,7 @@ namespace TS3AudioBot.Audio
 			return descBuilder.ToString();
 		}
 
-		public async Task<MediaPlayResource?> GetPlayObject(MusicInfo musicInfo)
+		public async Task<MediaPlayResource?> GetPlayObject(InvokerData invoker, MusicInfo musicInfo)
 		{
 			if (ts3Client is null)
 			{
@@ -1241,31 +1214,32 @@ namespace TS3AudioBot.Audio
 				return null;
 			}
 
-			if (this.NeteaseAPI is null || Header is null)
+			if (this.NcmApi is null || Header is null)
 			{
 				Log.Error("[PlayManager.GetPlayObject] this.neteaseApi is null || header is null");
 				return null;
 			}
 			try
 			{
-				await musicInfo.InitMusicInfo(NeteaseAPI, Header);
-				string? url = await musicInfo.GetURL(NeteaseAPI, Header);
+				await musicInfo.InitMusicInfo(NcmApi, Header);
+				string? url = await musicInfo.GetURL(NcmApi, Header);
 				if (url is null || url.StartsWith("error"))
 				{
 					string? which = musicInfo.DirectUrl is null ? musicInfo.Name : musicInfo.DirectUrl;
 					which ??= "null";
+					url ??= "null";
 					await ts3Client.SendChannelMessage($"音乐链接获取失败或目录无效 [{which}] {url}");
-					await PlayNextMusic();
+					await PlayNextMusic(invoker);
 					return null;
 				}
-				Log.Info($"Music name: {musicInfo.GetFullName()}, picUrl: {musicInfo.GetImage()}, url: {url}");
+				Log.Info($"Music name: {musicInfo.GetFullName()}, picUrl: {musicInfo.GetImage(DefaultImage)}, url: {url}");
 
 				await ts3Client.SendChannelMessage($"► 正在播放：{musicInfo.GetFullNameBBCode()}");
 
 				string? desc;
 				if (musicInfo.InPlayList)
 				{
-					desc = $"[{currentPlay}/{MusicInfoList.Count}] {musicInfo.GetFullName()}";
+					desc = $"[{CurrentPlay}/{MusicInfoList.Count}] {musicInfo.GetFullName()}";
 				}
 				else
 				{
@@ -1273,13 +1247,13 @@ namespace TS3AudioBot.Audio
 				}
 				await SetAvatarAndDesc(musicInfo, desc);
 
-				return new MediaPlayResource(url, await musicInfo.GetAudioResource(), await musicInfo.GetImage(), false);
+				return new MediaPlayResource(url, await musicInfo.GetAudioResource(), await musicInfo.GetImage(DefaultImage), false);
 			}
 			catch (Exception e)
 			{
 				Log.Error(e, "PlayMusic error" + e.ToString());
 				await ts3Client.SendChannelMessage($"播放音乐失败 [{musicInfo.Name}]");
-				await PlayNextMusic();
+				await PlayNextMusic(invoker);
 				return null;
 			}
 		}
@@ -1306,7 +1280,7 @@ namespace TS3AudioBot.Audio
 			Status1 status;
 			if (string.IsNullOrEmpty(code))
 			{
-				url = $"{NeteaseAPI}/captcha/sent?phone={phone}&t={Utils.GetTimeStamp()}";
+				url = $"{NcmApi}/captcha/sent?phone={phone}&t={Utils.GetTimeStamp()}";
 				status = await Utils.HttpGetAsync<Status1>(url);
 				if (status.code == 200)
 				{
@@ -1318,15 +1292,15 @@ namespace TS3AudioBot.Audio
 				}
 			}
 
-			url = $"{NeteaseAPI}/captcha/verify?phone={phone}&captcha={code}&t={Utils.GetTimeStamp()}";
+			url = $"{NcmApi}/captcha/verify?phone={phone}&captcha={code}&t={Utils.GetTimeStamp()}";
 			status = await Utils.HttpGetAsync<Status1>(url);
 			if (status.code != 200)
 			{
 				return "验证码错误";
 			}
-			url = $"{NeteaseAPI}/login/cellphone?phone={phone}&captcha={code}&t={Utils.GetTimeStamp()}";
+			url = $"{NcmApi}/login/cellphone?phone={phone}&captcha={code}&t={Utils.GetTimeStamp()}";
 			status = await Utils.HttpGetAsync<Status1>(url);
-			if (status.code == 200)
+			if (status.code == 200 && status.cookie != null)
 			{
 				ChangeCookies(status.cookie, false);
 				return "登陆成功";
@@ -1340,8 +1314,10 @@ namespace TS3AudioBot.Audio
 		public async Task<string> LoginQR()
 		{
 			if (ts3Client is null) return "ts3Client is null";
-			string key = await GetLoginKey();
-			string qrimg = await GetLoginQRImage(key);
+			string? key = await GetLoginKey();
+			string? qrimg = await GetLoginQRImage(key);
+
+			if (key is null || qrimg is null) return "尝试登陆时回应为空";
 
 			await ts3Client.SendChannelMessage("正在生成二维码");
 			await ts3Client.SendChannelMessage(qrimg);
@@ -1397,20 +1373,27 @@ namespace TS3AudioBot.Audio
 			return result;
 		}
 
-		public string Switch(int from, int to)
+		public string Move(int from, int to)
 		{
 			try
 			{
+				if (--from < 0 || to > MusicInfoList.Count) return "数字过大或过小";
 				from--;
 				to--;
-				MusicInfo tmp = MusicInfoList[to];
-				MusicInfoList[to] = MusicInfoList[from];
-				MusicInfoList[from] = tmp;
+				(MusicInfoList[from], MusicInfoList[to]) = (MusicInfoList[to], MusicInfoList[from]);
 			}
 			catch (Exception  e) {
 				return e.Message;
 			}
 			return "交换成功";
+		}
+
+		public string Remove(int i)
+		{
+			i--;
+			if (i < 0 || i >= MusicInfoList.Count) return "数字过大";
+			MusicInfoList.RemoveAt(i);
+			return "移除成功";
 		}
 	}
 }

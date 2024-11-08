@@ -42,7 +42,7 @@ namespace TS3AudioBot
 		private readonly TickWorker idleTickWorker;
 
 		private bool isClosed;
-		private bool NCMLoaded;
+		private bool NCMLoaded = false;
 
 		internal BotInjector Injector { get; }
 		internal DedicatedTaskScheduler Scheduler { get; }
@@ -186,7 +186,7 @@ namespace TS3AudioBot
 
 			Log.Info("Bot \"{0}\" connecting to \"{1}\"", config.Name, config.Connect.Address);
 
-			Task<E<string>> result = Task.FromResult(ts3client.Connect());
+			var result = Task.FromResult(ts3client.Connect());
 
 			return result;
 		}
@@ -230,7 +230,7 @@ namespace TS3AudioBot
 			}
 			if (!NCMLoaded)
 			{
-				await this.NCMInit();
+				await NCMInit();
 				NCMLoaded = true;
 			}
 		}
@@ -242,7 +242,6 @@ namespace TS3AudioBot
 				Log.Error("[Bot.NCMInit] null player");
 				return;
 			}
-			Log.Info(player.ToString());
 			await playManager.Init(ts3FullClient, ts3client, player);
 		}
 
