@@ -4,9 +4,8 @@
         "module": "es2015",
         "moduleResolution": "node",
         "sourceMap": true,
-        "watch": false,
+        // "watch": false,
         "rootDir": "src/ts",
-
         "removeComments": true,
         "noImplicitAny": true,
         "strictNullChecks": true,
@@ -19,9 +18,7 @@
         "strictPropertyInitialization": true,
         "strictFunctionTypes": true,
         "strict": true,
-
         "jsx": "react",
         "jsxFactory": "createElement"
     }
 }
- 

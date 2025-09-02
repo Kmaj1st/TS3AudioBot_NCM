@@ -22,11 +22,11 @@ using TS3AudioBot.Localization;
 
 namespace TS3AudioBot.ResourceFactories
 {
-	public static class YoutubeDlHelper
+	public static class YtDlpHelper
 	{
 		private static readonly NLog.Logger Log = NLog.LogManager.GetCurrentClassLogger();
 		public static ConfPath? DataObj { private get; set; }
-		private static string? YoutubeDlPath => DataObj?.Path.Value;
+		private static string? YtDlpPath => DataObj?.Path.Value;
 
 		private const string ParamGetSingleVideo = " --no-warnings --dump-json --id --";
 		private const string ParamGetPlaylist = "--no-warnings --yes-playlist --flat-playlist --dump-single-json --id --";
@@ -34,78 +34,78 @@ namespace TS3AudioBot.ResourceFactories
 
 		public static async Task<JsonYtdlDump> GetSingleVideo(string id)
 		{
-			var ytdlPath = FindYoutubeDl();
+			var ytdlPath = FindYtDlp();
 			if (ytdlPath is null)
 				throw Error.LocalStr(strings.error_ytdl_not_found);
 
 			var param = $"{ytdlPath.Value.param}{ParamGetSingleVideo} {id}";
-			return await RunYoutubeDl<JsonYtdlDump>(ytdlPath.Value.ytdlpath, param);
+			return await RunYtDlp<JsonYtdlDump>(ytdlPath.Value.ytdlpath, param);
 		}
 
 		public static async Task<JsonYtdlPlaylistDump> GetPlaylistAsync(string url)
 		{
-			var ytdlPath = FindYoutubeDl();
+			var ytdlPath = FindYtDlp();
 			if (ytdlPath is null)
 				throw Error.LocalStr(strings.error_ytdl_not_found);
 
 			var param = $"{ytdlPath.Value.param}{ParamGetPlaylist} {url}";
-			return await RunYoutubeDl<JsonYtdlPlaylistDump>(ytdlPath.Value.ytdlpath, param);
+			return await RunYtDlp<JsonYtdlPlaylistDump>(ytdlPath.Value.ytdlpath, param);
 		}
 
 		public static async Task<JsonYtdlPlaylistDump> GetSearchAsync(string text)
 		{
-			var ytdlPath = FindYoutubeDl();
+			var ytdlPath = FindYtDlp();
 			if (ytdlPath is null)
 				throw Error.LocalStr(strings.error_ytdl_not_found);
 
 			var param = $"{ytdlPath.Value.param}{ParamGetSearch}\"{text}\"";
-			return await RunYoutubeDl<JsonYtdlPlaylistDump>(ytdlPath.Value.ytdlpath, param);
+			return await RunYtDlp<JsonYtdlPlaylistDump>(ytdlPath.Value.ytdlpath, param);
 		}
 
-		public static (string ytdlpath, string param)? FindYoutubeDl()
+		public static (string ytdlpath, string param)? FindYtDlp()
 		{
-			var youtubeDlPath = YoutubeDlPath;
-			if (string.IsNullOrEmpty(youtubeDlPath))
+			var ytDlpPath = YtDlpPath;
+			if (string.IsNullOrEmpty(ytDlpPath))
 			{
-				// Default path youtube-dl is suggesting to install
-				const string defaultYtDlPath = "/usr/local/bin/youtube-dl";
+				// Default path yt-dlp is suggesting to install
+				const string defaultYtDlPath = "/usr/local/bin/yt-dlp";
 				if (File.Exists(defaultYtDlPath))
 					return (defaultYtDlPath, "");
 
 				// Default path most package managers install to
-				const string defaultPkgManPath = "/usr/bin/youtube-dl";
+				const string defaultPkgManPath = "/usr/bin/yt-dlp";
 				if (File.Exists(defaultPkgManPath))
 					return (defaultPkgManPath, "");
 
-				youtubeDlPath = Directory.GetCurrentDirectory();
+				ytDlpPath = Directory.GetCurrentDirectory();
 			}
 
 			string fullCustomPath;
-			try { fullCustomPath = Path.GetFullPath(youtubeDlPath); }
+			try { fullCustomPath = Path.GetFullPath(ytDlpPath); }
 			catch (ArgumentException ex)
 			{
-				Log.Warn(ex, "Your youtube-dl path may contain invalid characters");
+				Log.Warn(ex, "Your yt-dlp path may contain invalid characters");
 				return null;
 			}
 
-			// Example: /home/teamspeak/youtube-dl where 'youtube-dl' is the binary
+			// Example: /home/teamspeak/yt-dlp where 'yt-dlp' is the binary
 			if (File.Exists(fullCustomPath) || File.Exists(fullCustomPath + ".exe"))
 				return (fullCustomPath, "");
 
-			// Example: /home/teamspeak where the binary 'youtube-dl' lies in ./teamspeak/
-			string fullCustomPathWithoutFile = Path.Combine(fullCustomPath, "youtube-dl");
+			// Example: /home/teamspeak where the binary 'yt-dlp' lies in ./teamspeak/
+			string fullCustomPathWithoutFile = Path.Combine(fullCustomPath, "yt-dlp");
 			if (File.Exists(fullCustomPathWithoutFile) || File.Exists(fullCustomPathWithoutFile + ".exe"))
 				return (fullCustomPathWithoutFile, "");
 
-			// Example: /home/teamspeak/youtube-dl where 'youtube-dl' is the github project folder
-			string fullCustomPathGhProject = Path.Combine(fullCustomPath, "youtube_dl", "__main__.py");
+			// Example: /home/teamspeak/yt-dlp where 'yt-dlp' is the github project folder
+			string fullCustomPathGhProject = Path.Combine(fullCustomPath, "yt_dlp", "__main__.py");
 			if (File.Exists(fullCustomPathGhProject))
 				return ("python", $"\"{fullCustomPathGhProject}\"");
 
 			return null;
 		}
 
-		public static async Task<T> RunYoutubeDl<T>(string path, string args) where T : notnull
+		public static async Task<T> RunYtDlp<T>(string path, string args) where T : notnull
 		{
 			try
 			{
@@ -153,7 +153,7 @@ namespace TS3AudioBot.ResourceFactories
 
 				if (stdErr.Length > 0)
 				{
-					Log.Debug("youtube-dl failed to load the resource:\n{0}", stdErr);
+					Log.Debug("yt-dlp failed to load the resource:\n{0}", stdErr);
 					throw Error.LocalStr(strings.error_ytdl_song_failed_to_load);
 				}
 
@@ -161,7 +161,7 @@ namespace TS3AudioBot.ResourceFactories
 			}
 			catch (Win32Exception ex)
 			{
-				Log.Error(ex, "Failed to run youtube-dl: {0}", ex.Message);
+				Log.Error(ex, "Failed to run yt-dlp: {0}", ex.Message);
 				throw Error.Exception(ex).LocalStr(strings.error_ytdl_failed_to_run);
 			}
 		}
@@ -178,7 +178,7 @@ namespace TS3AudioBot.ResourceFactories
 			}
 			catch (Exception ex)
 			{
-				Log.Debug(ex, "Failed to read youtube-dl json data");
+				Log.Debug(ex, "Failed to read yt-dlp json data");
 				throw Error.Exception(ex).LocalStr(strings.error_media_internal_invalid);
 			}
 		}

@@ -73,10 +73,10 @@ namespace TS3AudioBot.ResourceFactories.Youtube
 			{
 			case LoaderPriority.Internal:
 				try { return await ResolveResourceInternal(resource); }
-				catch (AudioBotException) { goto case LoaderPriority.YoutubeDl; }
+				catch (AudioBotException) { goto case LoaderPriority.YtDlp; }
 
-			case LoaderPriority.YoutubeDl:
-				return await YoutubeDlWrapped(resource);
+			case LoaderPriority.YtDlp:
+				return await YtDlpWrapped(resource);
 
 			default:
 				throw Tools.UnhandledDefault(priority);
@@ -288,7 +288,7 @@ namespace TS3AudioBot.ResourceFactories.Youtube
 
 			string id = matchYtId.Groups[2].Value;
 			if (string.IsNullOrEmpty(YoutubeProjectId))
-				return await GetPlaylistYoutubeDl(id, url);
+				return await GetPlaylistYtDlp(id, url);
 			else
 				return await GetPlaylistYoutubeApi(id);
 		}
@@ -327,9 +327,9 @@ namespace TS3AudioBot.ResourceFactories.Youtube
 			return plist;
 		}
 
-		private async Task<Playlist> GetPlaylistYoutubeDl(string id, string url)
+		private async Task<Playlist> GetPlaylistYtDlp(string id, string url)
 		{
-			var plistData = await YoutubeDlHelper.GetPlaylistAsync(url);
+			var plistData = await YtDlpHelper.GetPlaylistAsync(url);
 			var plist = new Playlist().SetTitle(plistData.title ?? $"youtube-{id}");
 			plist.AddRange(plistData.entries
 				.Where(entry => entry.id != null)
@@ -344,20 +344,20 @@ namespace TS3AudioBot.ResourceFactories.Youtube
 			return plist;
 		}
 
-		private static async Task<PlayResource> YoutubeDlWrapped(AudioResource resource)
+		private static async Task<PlayResource> YtDlpWrapped(AudioResource resource)
 		{
-			Log.Debug("Falling back to youtube-dl!");
+			Log.Debug("Falling back to yt-dlp!");
 
-			var response = await YoutubeDlHelper.GetSingleVideo(resource.ResourceId);
+			var response = await YtDlpHelper.GetSingleVideo(resource.ResourceId);
 			resource.ResourceTitle = response.AutoTitle ?? $"Youtube-{resource.ResourceId}";
-			var songInfo = YoutubeDlHelper.MapToSongInfo(response);
-			var format = YoutubeDlHelper.FilterBest(response.formats);
+			var songInfo = YtDlpHelper.MapToSongInfo(response);
+			var format = YtDlpHelper.FilterBest(response.formats);
 			var url = format?.url;
 
 			if (string.IsNullOrEmpty(url))
 				throw Error.LocalStr(strings.error_ytdl_empty_response);
 
-			Log.Debug("youtube-dl succeeded!");
+			Log.Debug("yt-dlp succeeded!");
 			return new PlayResource(url, resource, songInfo: songInfo);
 		}
 
@@ -393,7 +393,7 @@ namespace TS3AudioBot.ResourceFactories.Youtube
 		public async Task<IList<AudioResource>> Search(ResolveContext _, string keyword)
 		{
 			if (string.IsNullOrEmpty(YoutubeProjectId))
-				return await SearchYoutubeDlAsync(keyword);
+				return await SearchYtDlpAsync(keyword);
 			else
 				return await SearchYoutubeApi(keyword);
 		}
@@ -417,9 +417,9 @@ namespace TS3AudioBot.ResourceFactories.Youtube
 				ResolverFor)).ToArray();
 		}
 
-		public async Task<IList<AudioResource>> SearchYoutubeDlAsync(string keyword)
+		public async Task<IList<AudioResource>> SearchYtDlpAsync(string keyword)
 		{
-			var search = await YoutubeDlHelper.GetSearchAsync(keyword);
+			var search = await YtDlpHelper.GetSearchAsync(keyword);
 
 			return search.entries
 				.Where(entry => entry.id != null)

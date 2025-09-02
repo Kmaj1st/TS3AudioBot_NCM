@@ -65,6 +65,9 @@ namespace TS3AudioBot.Audio
 		readonly string DeletedSongListDir = "songlists/deleted/";
 		readonly string SongListFileExtention = ".yaml";
 
+		private static string RootDir = "./";
+		private string CurrentDir = RootDir;
+
 		public int CurrentPlay { get; private set; }
 		public  MusicInfo? CurrentMusicInfo { get; private set; }
 		public Mode Mode { get; private set; }
@@ -100,6 +103,7 @@ namespace TS3AudioBot.Audio
 		}
 		public async Task<string> AddFolder(string folder)
 		{
+			folder = Path.Combine(CurrentDir, folder);
 			if (ts3Client is null) throw new NullReferenceException(nameof(ts3Client));
 			string[] files = Directory.GetFiles(folder);
 			string songNames= "";
@@ -118,6 +122,33 @@ namespace TS3AudioBot.Audio
 			else
 				MusicInfoList.Add(musicInfo);
 		}
+
+        public string ChangeDir(string? dir = null)
+        {
+            if (string.IsNullOrEmpty(dir) || dir == "." || dir == "./")
+            {
+                CurrentDir = RootDir;
+                return $"回到根目录: {CurrentDir}";
+            }
+            if (dir == "..")
+            {
+                CurrentDir = Directory.GetParent(CurrentDir)?.FullName ?? RootDir;
+                return $"当前目录: {CurrentDir}";
+            }
+            if (dir.StartsWith("../"))
+            {
+				ChangeDir("..");
+				return  ChangeDir(dir.Substring(3));
+            }
+            if (!Directory.Exists(dir))
+			{
+				string dirdir = Path.Combine(CurrentDir, dir);
+				if (!Directory.Exists(dirdir)) return "目录不存在";
+				CurrentDir = dirdir;
+			}
+			else CurrentDir = dir;
+            return $"当前目录: {CurrentDir}";
+        }
 
 		private void CheckOwnChannel()
 		{
@@ -140,6 +171,22 @@ namespace TS3AudioBot.Audio
 			}
 			Log.Info("ownChannelClients: {}", ownChannelClients.Count);
 		}
+
+        public string Dir()
+        {
+            string[] folders = Directory.GetDirectories(CurrentDir);
+            string[] files = Directory.GetFiles(CurrentDir);
+            string str = "";
+            foreach (string folder in folders)
+            {
+				str += $"[color=green]{Path.GetFileName(folder)}[/color] ";
+			}
+            foreach (string file in files)
+            {
+                str += $"{Path.GetFileName(file)} ";
+            }
+            return str;
+        }
 
 		public Task Enqueue(InvokerData invoker, AudioResource ar, PlayInfo? meta = null) => Enqueue(invoker, new PlaylistItem(ar, meta));
 		public async Task Enqueue(InvokerData invoker, string message, string? audioType = null, PlayInfo? meta = null)
@@ -205,7 +252,7 @@ namespace TS3AudioBot.Audio
 			}
 
 			MusicInfo? mInfo;
-			if (meta != null && meta.AudioSource != null)
+			if (meta != null && meta.AudioSource != null )
 			{
 				mInfo = meta.AudioSource switch
 				{
@@ -271,10 +318,15 @@ namespace TS3AudioBot.Audio
 
 		private async Task<MusicInfo?> GetMusicInfoDefaultAsync(string? arg = "")
 		{
+			string localPath = Path.Combine(CurrentDir, arg);
 			if (ts3Client is null) throw new NullReferenceException(nameof(ts3Client));
 			arg = Utils.ConvertToPlainUrl(arg);
 			if (String.IsNullOrWhiteSpace(arg)) return null;
-			if(await Utils.IsValidPathOrFile(arg)) {
+			if(await Utils.IsValidPathOrFile(localPath)) {
+				return new MusicInfo(null, localPath, false);
+			}
+			else if (arg.StartsWith("https://") || arg.StartsWith("http://"))
+			{
 				return new MusicInfo(null, arg, false);
 			}
 			
@@ -319,15 +371,21 @@ namespace TS3AudioBot.Audio
 			this.ts3Client = ts3Client;
 			this.playerConnection = player;
 
-			if (this.ts3Client is null || this.playerConnection is null)
+			if (this.ts3Client is null)
 			{
-				Log.Error("ts3Client or playerConnection is null");
+				Log.Fatal("ts3Client is null");
+				return;
+			}
+
+			if (this.playerConnection is null)
+			{
+				Log.Fatal("playerConnection is null");
 				return;
 			}
 
 			if (this.tsFullClient is null)
 			{
-				Log.Error("failed to add EventHandler for TSFullCliet");
+				Log.Fatal("tsFullClient is null");
 				return;
 			} else
 			{
@@ -425,7 +483,7 @@ namespace TS3AudioBot.Audio
 			}
 			else
 			{
-				yunConf = YunConfig.GetConfig("config/NCMSettings.yml");
+				yunConf = YunConfig.GetConfig();
 			}
 
 			Header = yunConf.Header;
@@ -588,8 +646,7 @@ namespace TS3AudioBot.Audio
 		{
 			if (ts3Client is null)
 			{
-				Log.Fatal("[PlayManager.SetAvatarAndDesc] ts3Client is null");
-				throw new ArgumentNullException(nameof(ts3Client));
+				Log.Warn("[PlayManager.SetAvatarAndDesc] ts3Client is null");
 			}
 
 			(string? song_name, PlayInfo? meta) = ParseArgs(args);
@@ -869,7 +926,13 @@ namespace TS3AudioBot.Audio
 				}
 
 				CurrentMusicInfo = musicInfo;
-				await Play(invoker, new MediaPlayResource(musicUrl, await musicInfo.GetAudioResource(), await musicInfo.GetImage(DefaultImage), false));
+				await Play(invoker,
+					new MediaPlayResource(
+						musicUrl,
+						await musicInfo.GetAudioResource(),
+						await musicInfo.GetImage(DefaultImage),
+						false)
+					);
 
 				if (ts3Client is null)
 				{

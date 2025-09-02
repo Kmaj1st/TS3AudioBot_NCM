@@ -108,9 +108,9 @@ namespace TS3AudioBot.ResourceFactories
 		{
 			Log.Debug("Falling back to youtube-dl!");
 
-			var response = await YoutubeDlHelper.GetSingleVideo(link);
+			var response = await YtDlpHelper.GetSingleVideo(link);
 			var title = response.title ?? $"Soundcloud-{link}";
-			var format = YoutubeDlHelper.FilterBest(response.formats);
+			var format = YtDlpHelper.FilterBest(response.formats);
 			var url = format?.url;
 
 			if (string.IsNullOrEmpty(url))

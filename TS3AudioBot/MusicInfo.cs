@@ -99,19 +99,19 @@ public class MusicInfo
 
 	public string GetURLFileName()
 	{
-		string fn;
+		string file_name;
 		if (DirectUrl is null) return "null";
 		if (File.Exists(DirectUrl))
 		{
-			fn = Path.GetFileNameWithoutExtension(DirectUrl);
-			Log.Info($"Using file name ({fn}) instead of song name");
+			file_name = Path.GetFileNameWithoutExtension(DirectUrl);
+			Log.Info($"Using file name ({file_name}) instead of song name");
 		} else
 		{
 			string[] strings = DirectUrl.Split("/");
-			fn = strings[^1];
+			file_name = strings[^1];
 		}
 
-		return fn;
+		return file_name;
 	}
 
 	public string GetFullNameBBCode()
@@ -142,6 +142,10 @@ public class MusicInfo
 
     public async Task<AudioResource> GetAudioResource()
     {
+		if (DirectUrl is null)
+		{
+			Log.Error("DirectUrl is null");
+		}
 		if (await Utils.IsValidPathOrFile(DirectUrl))
 		{
 			return new AudioResource(DirectUrl, GetFullName(), "media");

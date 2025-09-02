@@ -72,7 +72,7 @@ namespace TS3AudioBot.Config
 	public class ConfTools : ConfigTable
 	{
 		// youtube-dl can be empty by default as we make some thorough lookups.
-		public ConfPath YoutubeDl { get; } = Create<ConfPath>("youtube-dl",
+		public ConfPath YoutubeDl { get; } = Create<ConfPath>("yt-dlp",
 			"Path to the youtube-dl binary or local git repository.");
 		public ConfToolsFfmpeg Ffmpeg { get; } = Create<ConfToolsFfmpeg>("ffmpeg",
 			"The path to ffmpeg.");

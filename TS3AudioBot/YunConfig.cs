@@ -18,16 +18,26 @@ namespace TS3AudioBot
 		public string DefaultImage { get; set; }
 
 		[YamlIgnore]
-		private string? Path { get; set; }
+		private static string? ConfigDir { get; set; }
+		[YamlIgnore]
+		private static string? ConfigFileName { get; set; }
 		[YamlIgnore]
         public int CurrentVersion = 1;
 
-        public static YunConfig GetConfig(string path)
+		private static string ConfigPath(string? configDir = null, string? configFilename = null)
+		{
+			ConfigDir = configDir ?? ConfigDir;
+			ConfigDir ??= Path.Combine(Directory.GetCurrentDirectory(), "config");
+			ConfigFileName = configFilename ?? ConfigFileName;
+			ConfigFileName ??= "ncmconfig.yaml";
+			return Path.Combine(ConfigDir, ConfigFileName);
+		}
+		public static YunConfig GetConfig(string? configDir = null, string? configFilename=null)
         {
-            try
+			string path = ConfigPath(configDir, configFilename);
+			try
             {
                 var config = YamlSerialize.Deserializer<YunConfig>(path);
-                config.Path = path;
                 if (config.Version < config.CurrentVersion)
                 {
                     config.Version = config.CurrentVersion;
@@ -50,8 +60,7 @@ namespace TS3AudioBot
                         { "Cookie", "" },
                         { "User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 Edg/122.0.0.0" }
                     },
-					DefaultImage = "https://cataas.com/cat/says/GoodMusic?fontSize=32&fontColor=gold&width=256&height=256",
-                    Path = path,
+					DefaultImage = "https://cataas.com/cat/says/GoodMusic?fontSize=32&fontColor=gold&width=256&height=256"
 				};
                 config.Save();
 				NLog.LogManager.GetCurrentClassLogger().Warn(e);
@@ -62,7 +71,12 @@ namespace TS3AudioBot
 
         public void Save()
         {
-            YamlSerialize.Serializer(this, Path is null ? "" : Path);
+			string path = ConfigPath();
+			if (ConfigDir != null && !Directory.Exists(ConfigDir))
+			{
+				Directory.CreateDirectory(ConfigDir);
+			}
+			YamlSerialize.Serializer(this, path is null ? "" : path);
         }
     }
 }

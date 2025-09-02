@@ -443,6 +443,32 @@ namespace TS3AudioBot
 			}
 		}
 
+		[Command("cd")]
+		public static string CommandChangeDir(PlayManager pm)
+		{
+			return pm.ChangeDir();
+		}
+
+		[Command("cd")]
+		public static string CommandChangeDir(PlayManager pm, string? str)
+		{
+			return pm.ChangeDir(str);
+		}
+
+		[Command("cdd")]
+		public static string CommandChangeDirAndDir(PlayManager pm)
+		{
+			pm.ChangeDir();
+			return pm.Dir();
+		}
+
+		[Command("cdd")]
+		public static string CommandChangeDirAndDir(PlayManager pm, string? str)
+		{
+			pm.ChangeDir(str);
+			return pm.Dir();
+		}
+
 		/*
 		[Command("clear")]
 		public static void CommandClear(PlaylistManager playlistManager) => playlistManager.Clear();
@@ -485,6 +511,12 @@ namespace TS3AudioBot
 					await image.Stream.CopyToAsync(response.Body);
 				});
 			});
+
+		[Command("dir")]
+		public static string CommandDir(PlayManager pm)
+		{
+			return pm.Dir();
+		}
 
 		[Command("eval")]
 		[Usage("<command> <arguments...>", "Executes the given command on arguments")]
@@ -1178,6 +1210,7 @@ namespace TS3AudioBot
 			(string? _, PlayInfo? meta) = PlayManager.ParseArgs(attributes);
 			await playManager.Play(invoker, rsc.AudioResource, meta);
 		}
+
 		[Command("plugin list")]
 		public static JsonArray<PluginStatusInfo> CommandPluginList(PluginManager pluginManager, Bot? bot = null)
 			=> new JsonArray<PluginStatusInfo>(pluginManager.GetPluginOverview(bot), PluginManager.FormatOverview);

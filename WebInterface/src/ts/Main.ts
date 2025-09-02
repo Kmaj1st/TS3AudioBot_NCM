@@ -21,7 +21,7 @@ import { ApiAuth } from "./ApiAuth";
 Vue.use(VueRouter);
 Vue.use(Buefy);
 Vue.directive("focus", {
-	inserted(el) {
+	inserted(el: HTMLInputElement) {
 		let ichild = el as HTMLInputElement;
 		if (ichild.tagName !== "input") {
 			ichild = el.querySelector("input")!;

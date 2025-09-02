@@ -12,6 +12,6 @@ namespace TS3AudioBot.ResourceFactories.Youtube
 	public enum LoaderPriority
 	{
 		Internal,
-		YoutubeDl
+		YtDlp
 	}
 }

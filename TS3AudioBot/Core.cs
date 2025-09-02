@@ -83,7 +83,7 @@ namespace TS3AudioBot
 				throw new Exception("Could not load all core modules");
 
 			Upgrader.PerformUpgrades(injector);
-			YoutubeDlHelper.DataObj = config.Tools.YoutubeDl;
+			YtDlpHelper.DataObj = config.Tools.YoutubeDl;
 
 			injector.GetModuleOrThrow<CommandManager>().RegisterCollection(MainCommands.Bag);
 			injector.GetModuleOrThrow<RightsManager>().CreateConfigIfNotExists(setup.Interactive);
