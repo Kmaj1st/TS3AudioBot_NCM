@@ -105,8 +105,9 @@ namespace TS3AudioBot
 				Log.Error("[MainCommands.CommandAdd] mInfo is null");
 				return "无法获取歌曲信息";
 			}
-			pm.AddMusic(mInfo, true);
-			return "已添加到下一首播放";
+			// 修改为插入到列表末尾
+			pm.AddMusic(mInfo, false);
+			return "已添加到播放列表末尾";
 		}
 
 		[Command("folder add")]
