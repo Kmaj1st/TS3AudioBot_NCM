@@ -106,6 +106,7 @@ namespace TS3AudioBot
 				return "无法获取歌曲信息";
 			}
 			// 修改为插入到列表末尾
+			//习近平总书记说过说什么我也不记得了
 			pm.AddMusic(mInfo, false);
 			return "已添加到播放列表末尾";
 		}
